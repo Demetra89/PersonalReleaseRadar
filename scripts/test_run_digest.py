@@ -20,7 +20,7 @@ if os.path.exists(env_path):
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
-print("Starting Ultimate Spotify Release Radar Pipeline...")
+print("Starting Cleaned Ultimate Release Radar Pipeline...")
 
 # 1. Fetch ALL 229 favorite artists from Postgres database
 import subprocess
@@ -46,6 +46,9 @@ for ch in channels:
                 clean = html.unescape(clean)
                 for line in clean.split('\n'):
                     line = line.strip()
+                    # Skip meta headers and bot info
+                    if 'присылайте' in line.lower() or 'забыли' in line.lower() or 'альбомы:' in line.lower() or 'синглы:' in line.lower():
+                        continue
                     if line.startswith('•') or line.startswith('-') or line.startswith('—') or (len(line) > 2 and line[0].isdigit() and (line[1] == '.' or line[2] == '.')):
                         cleaned_line = re.sub(r'^[•—\-*\d.\s]+', '', line).strip()
                         if '—' in cleaned_line or '-' in cleaned_line:
@@ -53,7 +56,9 @@ for ch in channels:
                             if len(parts) == 2:
                                 art_name = parts[0].strip()
                                 trk_name = parts[1].replace('«', '').replace('»', '').replace('"', '').strip()
-                                if len(art_name) > 1 and len(trk_name) > 1:
+                                # Clean trailing dates like [30.07.2026]
+                                trk_name = re.sub(r'\[\d{2}\.\d{2}\.\d{4}\]', '', trk_name).strip()
+                                if len(art_name) > 1 and len(trk_name) > 1 and len(art_name) + len(trk_name) < 70:
                                     all_parsed_drops.append({
                                         'artist': art_name,
                                         'title': trk_name
@@ -61,30 +66,9 @@ for ch in channels:
     except Exception as e:
         pass
 
-# Also check iTunes Search API for favorite artists (last 14 days)
-date_cutoff = datetime.now() - timedelta(days=14)
-for artist in list(favorite_artists)[:45]:
-    try:
-        url = f"https://itunes.apple.com/search?term={urllib.parse.quote(artist)}&entity=album&country=RU&limit=3"
-        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req, timeout=2) as resp:
-            data = json.loads(resp.read().decode('utf-8'))
-            for album in data.get('results', []):
-                rel_date_str = album.get('releaseDate')
-                if rel_date_str:
-                    rel_date = datetime.strptime(rel_date_str.split('T')[0], '%Y-%m-%d')
-                    if rel_date >= date_cutoff:
-                        all_parsed_drops.append({
-                            'artist': album.get('artistName'),
-                            'title': album.get('collectionName')
-                        })
-    except Exception as e:
-        pass
-
 # Deduplicate all drops & build Spotify search URLs
 dedup_drops = {}
 for d in all_parsed_drops:
-    # Clean HTML unescaping
     art_clean = html.unescape(d['artist']).strip()
     trk_clean = html.unescape(d['title']).strip()
     
@@ -98,7 +82,7 @@ for d in all_parsed_drops:
         }
 
 unique_drops = list(dedup_drops.values())
-print(f"Total unique drops gathered: {len(unique_drops)}")
+print(f"Total clean unique drops gathered: {len(unique_drops)}")
 
 # 3. Categorize drops strictly: FAVORITES vs GENERAL
 taste_list = []
@@ -118,7 +102,7 @@ for drop in unique_drops:
 
 print(f"Favorites drops found: {len(taste_list)} | General drops found: {len(general_list)}")
 
-# 4. Build Clean Telegram Markdown message (NO '---', NO '&amp;', NO troetochia)
+# 4. Build Clean Telegram Markdown message
 msg_lines = ["🔥 *ПЯТНИЧНЫЙ МУЗЫКАЛЬНЫЙ РАДАР РЕЛИЗОВ* 🔥\n"]
 
 if taste_list:
@@ -152,4 +136,4 @@ try:
 except Exception as e:
     print("Telegram send error:", e)
 
-print("Ultimate Spotify Release Radar completed!")
+print("Cleaned Spotify Release Radar completed!")
