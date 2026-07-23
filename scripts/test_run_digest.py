@@ -72,7 +72,7 @@ artist, title, release_type, source (taste / ru_cloud / us_rap), url (если �
 {json.dumps(new_releases, ensure_ascii=False)}
 """
 
-gemini_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+gemini_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key={GEMINI_API_KEY}"
 gemini_body = json.dumps({"contents": [{"parts": [{"text": prompt}]}]}).encode('utf-8')
 
 digest_text = ""

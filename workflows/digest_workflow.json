@@ -119,7 +119,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "=https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={{ $env.GEMINI_API_KEY }}",
+        "url": "=https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key={{ $env.GEMINI_API_KEY }}",
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={\n  \"contents\": [\n    {\n      \"parts\": [\n        {\n          \"text\": \"Ты — классификатор музыкальных новостей. Тебе присылают текст поста из телеграм-канала о музыке. Определи, анонсирует ли пост НОВЫЙ релиз (сингл, альбом, снипет с датой выхода, дроп) конкретного артиста, или нет (мемы, драма между артистами, тур-новости, реклама, просто фото/цитата без релиза).\\n\\nВерни строго JSON без markdown-обёртки и пояснений:\\n{\\n  \\\"is_release\\\": true/false,\\n  \\\"artist\\\": \\\"имя артиста или null\\\",\\n  \\\"title\\\": \\\"название трека/альбома или null\\\",\\n  \\\"release_type\\\": \\\"single/album/snippet/unknown\\\",\\n  \\\"confidence\\\": 0.0-1.0\\n}\\n\\nЕсли не уверен — ставь is_release: false.\\n\\nТекст поста:\\n\" + JSON.stringify($json.contentSnippet || $json.title)\n        }\n      ]\n    }\n  ]\n}",
@@ -201,7 +201,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "=https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={{ $env.GEMINI_API_KEY }}",
+        "url": "=https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key={{ $env.GEMINI_API_KEY }}",
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={\n  \"contents\": [\n    {\n      \"parts\": [\n        {\n          \"text\": \"Ты собираешь для меня пятничный дайджест новой музыки в Telegram.\\nНа вход дают JSON со списком релизов, у каждого элемента есть:\\nartist, title, release_type, source (taste / ru_cloud / us_rap), url (если есть), match_reason (почему это может понравиться — только для source=taste).\\n\\nПравила:\\n- Раздели вывод на секции по source с понятными заголовками:\\n  \\\"🎧 Новое от твоих артистов\\\", \\\"☁️ RU cloud/андеграунд\\\",\\n  \\\"🇺🇸 US рэп\\\"\\n- В секции \\\"твои артисты\\\" коротко (1 фраза) укажи, почему это может зайти, используя match_reason\\n- Не выдумывай факты, которых нет во входных данных\\n- Формат — Markdown для Telegram (используй *bold*, не используй заголовки H1/H2, не используй лишние эмодзи кроме заголовков секций)\\n- Максимум 15 релизов в сообщении: сначала все из taste, затем ru_cloud и us_rap вперемешку\\n- Если пустая секция — просто её не показывай\\n- Если список релизов вообще пуст — напиши одно короткое дружелюбное предложение в духе \\\"на этой неделе новых релизов не нашлось\\\"\\n\\nДанные:\\n\" + JSON.stringify($input.all().map(i => i.json))\n        }\n      ]\n    }\n  ]\n}",
