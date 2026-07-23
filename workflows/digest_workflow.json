@@ -1,5 +1,7 @@
 {
+  "id": "digest_main_01",
   "name": "Пятничный Музыкальный Дайджест-Бот",
+  "active": true,
   "nodes": [
     {
       "parameters": {

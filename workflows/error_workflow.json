@@ -1,5 +1,7 @@
 {
+  "id": "error_handler_01",
   "name": "Обработчик ошибок (Error Trigger)",
+  "active": true,
   "nodes": [
     {
       "parameters": {},
