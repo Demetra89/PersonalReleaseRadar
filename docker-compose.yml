@@ -8,6 +8,8 @@ services:
     ports:
       - "80:80"
       - "443:443"
+    environment:
+      - TZ=Europe/Moscow
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
@@ -24,6 +26,7 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-n8n}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-n8n_password_change_me}
       POSTGRES_DB: ${POSTGRES_DB:-n8n}
+      TZ: Europe/Moscow
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
@@ -53,7 +56,8 @@ services:
       - N8N_SECURE_COOKIE=false
       - NODE_ENV=production
       - WEBHOOK_URL=http://${DOMAIN_NAME:-144.31.148.133.sslip.io}:5678/
-      - GENERIC_TIMEZONE=Europe/Amsterdam
+      - GENERIC_TIMEZONE=Europe/Moscow
+      - TZ=Europe/Moscow
       - N8N_COMMUNITY_PACKAGES_ENABLED=true
       - N8N_AI_ENABLED=true
     volumes:
@@ -70,6 +74,7 @@ services:
       - NODE_ENV=production
       - CACHE_TYPE=memory
       - REQUEST_TIMEOUT=10000
+      - TZ=Europe/Moscow
 
 volumes:
   caddy_data:
