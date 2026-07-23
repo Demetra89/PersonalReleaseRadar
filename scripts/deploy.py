@@ -50,10 +50,10 @@ if [ ! -f .env ]; then
     cp .env.example .env
 fi
 
-if command -v docker-compose &> /dev/null; then
-    docker-compose up -d
-else
+if docker compose version &> /dev/null; then
     docker compose up -d
+else
+    docker-compose up -d
 fi
 """
 run_remote(client, deploy_cmd)
@@ -61,10 +61,10 @@ run_remote(client, deploy_cmd)
 # 3. Check docker compose status
 status_cmd = """
 cd /opt/PersonalReleaseRadar
-if command -v docker-compose &> /dev/null; then
-    docker-compose ps
-else
+if docker compose version &> /dev/null; then
     docker compose ps
+else
+    docker-compose ps
 fi
 """
 run_remote(client, status_cmd)
