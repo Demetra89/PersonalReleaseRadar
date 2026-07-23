@@ -17,7 +17,7 @@ subprocess.run(f'docker exec -i {pg} psql -U n8n -d n8n -c "TRUNCATE TABLE artis
 
 for a in set(clean_favorites):
     escaped = a.replace("'", "''")
-    cmd = f"docker exec -i {pg} psql -U n8n -d n8n -c \"INSERT INTO artists (name) VALUES ('{escaped}');\""
+    cmd = f"docker exec -i {pg} psql -U n8n -d n8n -c \"INSERT INTO artists (name, source) VALUES ('{escaped}', 'spotify');\""
     subprocess.run(cmd, shell=True)
 
 count = subprocess.check_output(f"docker exec -i {pg} psql -U n8n -d n8n -c 'SELECT COUNT(*) FROM artists;'", shell=True).decode()
