@@ -49,12 +49,25 @@ fi
 if [ ! -f .env ]; then
     cp .env.example .env
 fi
-docker compose up -d
+
+if command -v docker-compose &> /dev/null; then
+    docker-compose up -d
+else
+    docker compose up -d
+fi
 """
 run_remote(client, deploy_cmd)
 
 # 3. Check docker compose status
-run_remote(client, "cd /opt/PersonalReleaseRadar && docker compose ps")
+status_cmd = """
+cd /opt/PersonalReleaseRadar
+if command -v docker-compose &> /dev/null; then
+    docker-compose ps
+else
+    docker compose ps
+fi
+"""
+run_remote(client, status_cmd)
 
 client.close()
 print("Deploy script completed successfully!")
