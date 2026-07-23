@@ -18,11 +18,10 @@ if os.path.exists(env_path):
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
-print("Starting Full Friday Release Radar Pipeline...")
+print("Starting Fast Direct Spotify Release Radar Pipeline...")
 
-# 1. Fetch ALL 83 favorite artists from Postgres database
+# 1. Fetch ALL favorite artists from Postgres database
 import subprocess
 artists_output = subprocess.check_output("docker exec -i $(docker ps -q -f name=postgres | head -n 1) psql -U n8n -d n8n -t -c 'SELECT name FROM artists;'", shell=True).decode('utf-8')
 favorite_artists = set(line.strip().lower() for line in artists_output.split('\n') if line.strip())
@@ -36,14 +35,13 @@ for ch in channels:
     try:
         url = f'http://144.31.148.133/telegram/channel/{ch}'
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req, timeout=6) as resp:
+        with urllib.request.urlopen(req, timeout=5) as resp:
             xml_data = resp.read().decode('utf-8')
             root = ET.fromstring(xml_data)
             items = root.findall('.//item')
             for item in items[:15]:
                 desc = item.find('description').text if item.find('description') is not None else ''
                 clean = re.sub(r'<[^>]+>', '\n', desc)
-                # Parse lines with bullet points or dashes
                 for line in clean.split('\n'):
                     line = line.strip()
                     if line.startswith('•') or line.startswith('-') or line.startswith('—'):
@@ -63,7 +61,7 @@ for ch in channels:
 
 # Also check iTunes Search API for favorite artists (last 14 days)
 date_cutoff = datetime.now() - timedelta(days=14)
-for artist in list(favorite_artists)[:30]:
+for artist in list(favorite_artists)[:35]:
     try:
         url = f"https://itunes.apple.com/search?term={urllib.parse.quote(artist)}&entity=album&country=RU&limit=3"
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
@@ -81,7 +79,7 @@ for artist in list(favorite_artists)[:30]:
     except Exception as e:
         pass
 
-# Deduplicate all drops
+# Deduplicate all drops & build Spotify search URLs
 dedup_drops = {}
 for d in all_parsed_drops:
     key = f"{d['artist'].lower()}_{d['title'].lower()}"
@@ -111,35 +109,23 @@ for drop in unique_drops:
 
 print(f"Favorites drops found: {len(taste_list)} | General drops found: {len(general_list)}")
 
-# 4. Format final message with Gemini
-prompt = f"""Ты формируешь ПЯТНИЧНЫЙ МУЗЫКАЛЬНЫЙ РАДАР РЕЛИЗОВ в Telegram.
-Твоя цель — сформировать ПОЛНЫЙ, НАСЫЩЕННЫЙ ДАЙДЖЕСТ (20-30 позиций).
+# 4. Build Telegram Markdown message directly (Instant & 100% Reliable)
+msg_lines = ["🔥 *ПЯТНИЧНЫЙ МУЗЫКАЛЬНЫЙ РАДАР РЕЛИЗОВ* 🔥\n"]
 
-Сформируй 2 БОЛЬШИХ РАЗДЕЛА:
-1. 🎧 *Твои любимые артисты* (помести СТРОГО ВСЕ релизы из списка taste_drops: SALUKI, Дора & Toxi$, GONE.Fludd, VILLIAN, midwxst и т.д.)
-2. ⚡️ *Горячие новинки недели (РФ и Запад)* (помести ВСЕ релизы из списка general_drops: ЛСП, SODA LUV, вышел покурить, Мэйби Бэйби, MAYOT, Rico Nasty и т.д.)
+if taste_list:
+    msg_lines.append("🎧 *Твои любимые артисты*\n")
+    for item in taste_list:
+        msg_lines.append(f"• [{item['artist']} — {item['title']}]({item['url']})")
+    msg_lines.append("\n---\n")
 
-ПРАВИЛА ОФОРМЛЕНИЯ ССЫЛОК:
-- Каждая строка: • [{drop['artist']} — {drop['title']}](url)
-- Запрещено менять ссылки url из входных данных!
-- Выведи ВСЕ переданные релизы, не вычеркивай и не сокращай список!
-- Формат — только чистый Telegram Markdown (*bold*, [ссылка](url)).
+if general_list:
+    msg_lines.append("⚡️ *Горячие новинки недели (РФ и Запад)*\n")
+    for item in general_list[:25]:
+        msg_lines.append(f"• [{item['artist']} — {item['title']}]({item['url']})")
+    msg_lines.append("\n---")
 
-Данные:
-Любимые артисты (taste_drops): {json.dumps(taste_list, ensure_ascii=False)}
-Общие новинки (general_drops): {json.dumps(general_list[:20], ensure_ascii=False)}
-"""
-
-digest_text = ""
-try:
-    gemini_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key={GEMINI_API_KEY}"
-    gemini_body = json.dumps({"contents": [{"parts": [{"text": prompt}]}]}).encode('utf-8')
-    req = urllib.request.Request(gemini_url, data=gemini_body, headers={'Content-Type': 'application/json'})
-    with urllib.request.urlopen(req, timeout=15) as resp:
-        res = json.loads(resp.read().decode('utf-8'))
-        digest_text = res['candidates'][0]['content']['parts'][0]['text']
-except Exception as e:
-    print("Gemini Digest Error:", e)
+msg_lines.append("\nНажмите на любой релиз, чтобы открыть его в Spotify! 🎧✨")
+digest_text = "\n".join(msg_lines)
 
 # 5. Send to Telegram
 tg_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -157,4 +143,4 @@ try:
 except Exception as e:
     print("Telegram send error:", e)
 
-print("Full 20-30 drops pipeline completed!")
+print("Fast 25+ Spotify Release Radar completed!")
