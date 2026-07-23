@@ -215,43 +215,33 @@
     },
     {
       "parameters": {
-        "chatId": "={{ $env.TELEGRAM_CHAT_ID }}",
-        "text": "={{ $json.candidates[0].content.parts[0].text }}",
-        "additionalFields": {
-          "parse_mode": "Markdown"
-        }
+        "method": "POST",
+        "url": "=https://api.telegram.org/bot{{ $env.TELEGRAM_BOT_TOKEN }}/sendMessage",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"chat_id\": \"{{ $env.TELEGRAM_CHAT_ID }}\",\n  \"text\": {{ JSON.stringify($json.candidates[0].content.parts[0].text) }},\n  \"parse_mode\": \"Markdown\"\n}",
+        "options": {}
       },
       "id": "16",
       "name": "Telegram (Send Digest)",
-      "type": "n8n-nodes-base.telegram",
-      "typeVersion": 1.2,
-      "position": [2300, 360],
-      "credentials": {
-        "telegramApi": {
-          "id": "telegram_bot",
-          "name": "Telegram Bot"
-        }
-      }
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2300, 360]
     },
     {
       "parameters": {
-        "chatId": "={{ $env.TELEGRAM_CHAT_ID }}",
-        "text": "🎧 *Пятничный дайджест*\n\nНа этой неделе новых интересных релизов не нашлось. Отдыхаем! 😴",
-        "additionalFields": {
-          "parse_mode": "Markdown"
-        }
+        "method": "POST",
+        "url": "=https://api.telegram.org/bot{{ $env.TELEGRAM_BOT_TOKEN }}/sendMessage",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"chat_id\": \"{{ $env.TELEGRAM_CHAT_ID }}\",\n  \"text\": \"🎧 *Пятничный дайджест*\\n\\nНа этой неделе новых интересных релизов не нашлось. Отдыхаем! 😴\",\n  \"parse_mode\": \"Markdown\"\n}",
+        "options": {}
       },
       "id": "17",
       "name": "Telegram (Send Empty Message)",
-      "type": "n8n-nodes-base.telegram",
-      "typeVersion": 1.2,
-      "position": [2080, 560],
-      "credentials": {
-        "telegramApi": {
-          "id": "telegram_bot",
-          "name": "Telegram Bot"
-        }
-      }
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2080, 560]
     }
   ],
   "connections": {

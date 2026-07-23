@@ -13,23 +13,18 @@
     },
     {
       "parameters": {
-        "chatId": "={{ $env.TELEGRAM_CHAT_ID }}",
-        "text": "=⚠️ *Ошибка в n8n workflow!*\n\n*Узел*: {{ $json.execution.lastNodeExecuted }}\n*Workflow*: {{ $json.workflow.name }}\n*Ошибка*: {{ $json.execution.error.message }}",
-        "additionalFields": {
-          "parse_mode": "Markdown"
-        }
+        "method": "POST",
+        "url": "=https://api.telegram.org/bot{{ $env.TELEGRAM_BOT_TOKEN }}/sendMessage",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"chat_id\": \"{{ $env.TELEGRAM_CHAT_ID }}\",\n  \"text\": \"⚠️ *Ошибка в n8n workflow!*\\n\\n*Узел*: \" + JSON.stringify($json.execution.lastNodeExecuted) + \"\\n*Workflow*: \" + JSON.stringify($json.workflow.name) + \"\\n*Ошибка*: \" + JSON.stringify($json.execution.error.message),\n  \"parse_mode\": \"Markdown\"\n}",
+        "options": {}
       },
       "id": "2",
       "name": "Telegram (Alert Error)",
-      "type": "n8n-nodes-base.telegram",
-      "typeVersion": 1.2,
-      "position": [320, 300],
-      "credentials": {
-        "telegramApi": {
-          "id": "telegram_bot",
-          "name": "Telegram Bot"
-        }
-      }
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [320, 300]
     }
   ],
   "connections": {
