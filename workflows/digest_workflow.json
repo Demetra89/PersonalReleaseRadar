@@ -39,9 +39,41 @@
     },
     {
       "parameters": {
-        "url": "http://rsshub:1200/telegram/channel/cloudeluxe"
+        "url": "=https://api.deezer.com/search/artist?q={{ encodeURIComponent($json.name) }}",
+        "options": {}
       },
       "id": "3",
+      "name": "Deezer API (Get Artist ID)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [540, 260]
+    },
+    {
+      "parameters": {
+        "url": "=https://api.deezer.com/artist/{{ $json.data[0].id }}/albums?limit=5",
+        "options": {}
+      },
+      "id": "4",
+      "name": "Deezer API (Get Albums)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [760, 260]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Фильтр свежих альбомов/синглов с Deezer API за 14 дней\nconst drops = [];\nconst now = new Date();\nconst cutoff = new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000);\n\nfor (const item of $input.all()) {\n  const albums = item.json.data || [];\n  for (const alb of albums) {\n    if (alb.release_date) {\n      const relDate = new Date(alb.release_date);\n      if (relDate >= cutoff) {\n        drops.push({\n          json: {\n            artist: alb.artist ? alb.artist.name : item.json.artist_name || '',\n            title: alb.title,\n            url: `https://open.spotify.com/search/${encodeURIComponent(alb.title)}` \n          }\n        });\n      }\n    }\n  }\n}\nreturn drops;"
+      },
+      "id": "5",
+      "name": "Code (Filter Fresh Deezer Albums)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [980, 260]
+    },
+    {
+      "parameters": {
+        "url": "http://rsshub:1200/telegram/channel/cloudeluxe"
+      },
+      "id": "6",
       "name": "RSS Read (@cloudeluxe)",
       "type": "n8n-nodes-base.rssFeedRead",
       "typeVersion": 1.1,
@@ -51,7 +83,7 @@
       "parameters": {
         "url": "http://rsshub:1200/telegram/channel/USANEWRAP"
       },
-      "id": "4",
+      "id": "7",
       "name": "RSS Read (@USANEWRAP)",
       "type": "n8n-nodes-base.rssFeedRead",
       "typeVersion": 1.1,
@@ -61,7 +93,7 @@
       "parameters": {
         "url": "http://rsshub:1200/telegram/channel/rhymesm"
       },
-      "id": "5",
+      "id": "8",
       "name": "RSS Read (@rhymesm)",
       "type": "n8n-nodes-base.rssFeedRead",
       "typeVersion": 1.1,
@@ -71,7 +103,7 @@
       "parameters": {
         "url": "http://rsshub:1200/telegram/channel/theflow"
       },
-      "id": "6",
+      "id": "9",
       "name": "RSS Read (@theflow)",
       "type": "n8n-nodes-base.rssFeedRead",
       "typeVersion": 1.1,
@@ -79,13 +111,24 @@
     },
     {
       "parameters": {
-        "jsCode": "const favArtists = new Set();\nfor (const item of $input.all()) {\n  if (item.json.name) {\n    favArtists.add(item.json.name.toLowerCase());\n  }\n}\n\nconst drops = [];\nconst dedup = new Set();\n\nfunction decodeEntities(encodedString) {\n  return encodedString\n    .replace(/&amp;/g, '&')\n    .replace(/&lt;/g, '<')\n    .replace(/&gt;/g, '>')\n    .replace(/&quot;/g, '\"')\n    .replace(/&#39;/g, \"'\");\n}\n\nfor (const item of $input.all()) {\n  const desc = item.json.description || item.json.title || '';\n  const clean = decodeEntities(desc.replace(/<[^>]+>/g, '\\n'));\n  for (let line of clean.split('\\n')) {\n    line = line.trim();\n    const lLower = line.toLowerCase();\n    if (lLower.includes('присылайте') || lLower.includes('забыли') || lLower.includes('альбомы:') || lLower.includes('синглы:')) {\n      continue;\n    }\n    if (line.startsWith('•') || line.startsWith('-') || line.startsWith('—') || (line.length > 2 && !isNaN(parseInt(line[0])) && (line[1] === '.' || line[2] === '.'))) {\n      const cleaned = line.replace(/^[•—\\-*\\d.\\s]+/, '').trim();\n      if (cleaned.includes('—') || cleaned.includes('-')) {\n        const parts = cleaned.split(/\\s+[—\\-]\\s+/);\n        if (parts.length >= 2) {\n          const art = parts[0].trim();\n          let trk = parts[1].replace(/[«»\"]/g, '').replace(/\\[\\d{2}\\.\\d{2}\\.\\d{4}\\]/g, '').trim();\n          if (art.length > 1 && trk.length > 1 && (art.length + trk.length < 70)) {\n            const key = `${art.toLowerCase()}_${trk.toLowerCase()}`;\n            if (!dedup.has(key)) {\n              dedup.add(key);\n              const searchQ = encodeURIComponent(`${art} ${trk}`);\n              drops.push({\n                artist: art,\n                title: trk,\n                url: `https://open.spotify.com/search/${searchQ}`\n              });\n            }\n          }\n        }\n      }\n    }\n  }\n}\n\nconst tasteList = [];\nconst generalList = [];\n\nfor (const drop of drops) {\n  const artLower = drop.artist.toLowerCase();\n  let isFav = false;\n  for (const fav of favArtists) {\n    if (fav.length > 1 && (fav.includes(artLower) || artLower.includes(fav))) {\n      isFav = true;\n      break;\n    }\n  }\n  if (isFav) tasteList.push(drop);\n  else generalList.push(drop);\n}\n\nlet msg = '🔥 *ПЯТНИЧНЫЙ МУЗЫКАЛЬНЫЙ РАДАР РЕЛИЗОВ* 🔥\\n\\n';\nif (tasteList.length > 0) {\n  msg += '🎧 *Твои любимые артисты*\\n\\n';\n  for (const item of tasteList) {\n    msg += `• [${item.artist} — ${item.title}](${item.url})\\n`;\n  }\n  msg += '\\n\\n';\n}\n\nif (generalList.length > 0) {\n  msg += '⚡️ *Горячие новинки недели (РФ и Запад)*\\n\\n';\n  for (const item of generalList.slice(0, 30)) {\n    msg += `• [${item.artist} — ${item.title}](${item.url})\\n`;\n  }\n  msg += '\\n\\n';\n}\nmsg += 'Нажмите на любой релиз, чтобы открыть его в Spotify! 🎧✨';\n\nreturn [{ json: { message: msg } }];"
+        "mode": "combine",
+        "combineBy": "combineAll"
       },
-      "id": "7",
-      "name": "Code (Parse All Drops & Match Favorites)",
+      "id": "10",
+      "name": "Merge All Providers",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [1200, 550]
+    },
+    {
+      "parameters": {
+        "jsCode": "const favArtists = new Set();\nfor (const item of $input.all()) {\n  if (item.json.name) {\n    favArtists.add(item.json.name.toLowerCase());\n  }\n}\n\nconst drops = [];\nconst dedup = new Set();\n\nfunction decodeEntities(encodedString) {\n  return encodedString\n    .replace(/&amp;/g, '&')\n    .replace(/&lt;/g, '<')\n    .replace(/&gt;/g, '>')\n    .replace(/&quot;/g, '\"')\n    .replace(/&#39;/g, \"'\");\n}\n\nfor (const item of $input.all()) {\n  const desc = item.json.description || item.json.title || '';\n  const clean = decodeEntities(desc.replace(/<[^>]+>/g, '\\n'));\n  for (let line of clean.split('\\n')) {\n    line = line.trim();\n    const lLower = line.toLowerCase();\n    if (lLower.includes('присылайте') || lLower.includes('забыли') || lLower.includes('альбомы:') || lLower.includes('синглы:')) {\n      continue;\n    }\n    if (line.startsWith('•') || line.startsWith('-') || line.startsWith('—') || (line.length > 2 && !isNaN(parseInt(line[0])) && (line[1] === '.' || line[2] === '.'))) {\n      const cleaned = line.replace(/^[•—\\-*\\d.\\s]+/, '').trim();\n      if (cleaned.includes('—') || cleaned.includes('-')) {\n        const parts = cleaned.split(/\\s+[—\\-]\\s+/);\n        if (parts.length >= 2) {\n          const art = parts[0].trim();\n          let trk = parts[1].replace(/[«»\"]/g, '').replace(/\\[\\d{2}\\.\\d{2}\\.\\d{4}\\]/g, '').trim();\n          if (art.length > 1 && trk.length > 1 && (art.length + trk.length < 75)) {\n            const key = `${art.toLowerCase()}_${trk.toLowerCase()}`;\n            if (!dedup.has(key)) {\n              dedup.add(key);\n              const searchQ = encodeURIComponent(`${art} ${trk}`);\n              drops.push({\n                artist: art,\n                title: trk,\n                url: `https://open.spotify.com/search/${searchQ}`\n              });\n            }\n          }\n        }\n      }\n    }\n  }\n  if (item.json.artist && item.json.title) {\n    const key = `${item.json.artist.toLowerCase()}_${item.json.title.toLowerCase()}`;\n    if (!dedup.has(key)) {\n      dedup.add(key);\n      const searchQ = encodeURIComponent(`${item.json.artist} ${item.json.title}`);\n      drops.push({\n        artist: item.json.artist,\n        title: item.json.title,\n        url: `https://open.spotify.com/search/${searchQ}`\n      });\n    }\n  }\n}\n\nconst tasteList = [];\nconst generalList = [];\n\nfor (const drop of drops) {\n  const artLower = drop.artist.toLowerCase();\n  let isFav = false;\n  for (const fav of favArtists) {\n    if (fav.length > 1 && (fav.includes(artLower) || artLower.includes(fav))) {\n      isFav = true;\n      break;\n    }\n  }\n  if (isFav) tasteList.push(drop);\n  else generalList.push(drop);\n}\n\nlet msg = '🔥 *ПЯТНИЧНЫЙ МУЗЫКАЛЬНЫЙ РАДАР РЕЛИЗОВ* 🔥\\n\\n';\nif (tasteList.length > 0) {\n  msg += '🎧 *Твои любимые артисты*\\n\\n';\n  for (const item of tasteList) {\n    msg += `• [${item.artist} — ${item.title}](${item.url})\\n`;\n  }\n  msg += '\\n\\n';\n}\n\nif (generalList.length > 0) {\n  msg += '⚡️ *Горячие новинки недели (РФ и Запад)*\\n\\n';\n  for (const item of generalList) {\n    msg += `• [${item.artist} — ${item.title}](${item.url})\\n`;\n  }\n  msg += '\\n\\n';\n}\nmsg += 'Нажмите на любой релиз, чтобы открыть его в Spotify! 🎧✨';\n\nreturn [{ json: { message: msg } }];"
+      },
+      "id": "11",
+      "name": "Code (Parse Deezer & Telegram Drops)",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [760, 640]
+      "position": [1420, 550]
     },
     {
       "parameters": {
@@ -96,11 +139,11 @@
         "jsonBody": "={\n  \"chat_id\": \"{{ $env.TELEGRAM_CHAT_ID }}\",\n  \"text\": {{ JSON.stringify($json.message) }},\n  \"parse_mode\": \"Markdown\",\n  \"disable_web_page_preview\": true\n}",
         "options": {}
       },
-      "id": "8",
-      "name": "Telegram (Send Full Spotify Digest)",
+      "id": "12",
+      "name": "Telegram (Send Multi-Provider Digest)",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [980, 640]
+      "position": [1640, 550]
     }
   ],
   "connections": {
@@ -139,7 +182,40 @@
       "main": [
         [
           {
-            "node": "Code (Parse All Drops & Match Favorites)",
+            "node": "Deezer API (Get Artist ID)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Deezer API (Get Artist ID)": {
+      "main": [
+        [
+          {
+            "node": "Deezer API (Get Albums)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Deezer API (Get Albums)": {
+      "main": [
+        [
+          {
+            "node": "Code (Filter Fresh Deezer Albums)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code (Filter Fresh Deezer Albums)": {
+      "main": [
+        [
+          {
+            "node": "Merge All Providers",
             "type": "main",
             "index": 0
           }
@@ -150,7 +226,7 @@
       "main": [
         [
           {
-            "node": "Code (Parse All Drops & Match Favorites)",
+            "node": "Merge All Providers",
             "type": "main",
             "index": 0
           }
@@ -161,7 +237,7 @@
       "main": [
         [
           {
-            "node": "Code (Parse All Drops & Match Favorites)",
+            "node": "Merge All Providers",
             "type": "main",
             "index": 0
           }
@@ -172,7 +248,7 @@
       "main": [
         [
           {
-            "node": "Code (Parse All Drops & Match Favorites)",
+            "node": "Merge All Providers",
             "type": "main",
             "index": 0
           }
@@ -183,18 +259,29 @@
       "main": [
         [
           {
-            "node": "Code (Parse All Drops & Match Favorites)",
+            "node": "Merge All Providers",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Code (Parse All Drops & Match Favorites)": {
+    "Merge All Providers": {
       "main": [
         [
           {
-            "node": "Telegram (Send Full Spotify Digest)",
+            "node": "Code (Parse Deezer & Telegram Drops)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code (Parse Deezer & Telegram Drops)": {
+      "main": [
+        [
+          {
+            "node": "Telegram (Send Multi-Provider Digest)",
             "type": "main",
             "index": 0
           }
