@@ -20,13 +20,13 @@ if os.path.exists(env_path):
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
-print("Starting Perfect Release Radar Pipeline...")
+print("Starting Clean 100% Deduplicated Release Radar Pipeline...")
 
 # 1. Fetch ALL favorite artists from Postgres database
 import subprocess
 artists_output = subprocess.check_output("docker exec -i $(docker ps -q -f name=postgres | head -n 1) psql -U n8n -d n8n -t -c 'SELECT name FROM artists;'", shell=True).decode('utf-8')
 favorite_artists = set(line.strip().lower() for line in artists_output.split('\n') if line.strip() and len(line.strip()) > 1)
-print(f"Loaded {len(favorite_artists)} favorite artists from database.")
+print(f"Loaded {len(favorite_artists)} clean favorite artists from database.")
 
 channels = ['cloudeluxe', 'USANEWRAP', 'rhymesm', 'theflow']
 all_parsed_drops = []
@@ -106,33 +106,38 @@ for ch in channels:
     except Exception as e:
         pass
 
-# 4. Strict Deduplication & Title Normalization
+# 4. Strict Title-Based Deduplication (Merges "Mayot — Дети бетона" and "Slatt Savage & MAYOT — Дети Бетона")
 dedup_drops = {}
 for d in all_parsed_drops:
     art_clean = html.unescape(d['artist']).strip()
     trk_clean = html.unescape(d['title']).strip()
     
-    # Strip "- Single", "- EP", "- Album"
+    # Clean "- Single", "- EP", "- Album"
     trk_normalized = re.sub(r'\s*-\s*(single|ep|album)$', '', trk_clean, flags=re.IGNORECASE).strip()
     
-    # Normalize key by removing punctuation/spaces
-    art_norm_key = re.sub(r'[^a-z0-9а-я]', '', art_clean.lower())
-    trk_norm_key = re.sub(r'[^a-z0-9а-я]', '', trk_normalized.lower())
+    # Key strictly by normalized title
+    title_key = re.sub(r'[^a-z0-9а-я]', '', trk_normalized.lower())
     
-    key = f"{art_norm_key}_{trk_norm_key}"
-    if key not in dedup_drops:
+    if title_key not in dedup_drops:
         search_q = urllib.parse.quote(f"{art_clean} {trk_normalized}")
-        dedup_drops[key] = {
+        dedup_drops[title_key] = {
             'artist': art_clean,
             'title': trk_normalized,
             'type': d.get('type', 'single'),
             'url': f"https://open.spotify.com/search/{search_q}"
         }
+    else:
+        # If new item has longer/more detailed artist name (e.g. Slatt Savage & MAYOT vs Mayot), update artist
+        existing = dedup_drops[title_key]
+        if len(art_clean) > len(existing['artist']):
+            search_q = urllib.parse.quote(f"{art_clean} {trk_normalized}")
+            existing['artist'] = art_clean
+            existing['url'] = f"https://open.spotify.com/search/{search_q}"
 
 unique_drops = list(dedup_drops.values())
-print(f"Total clean unique drops after strict deduplication: {len(unique_drops)}")
+print(f"Total clean unique drops after strict title deduplication: {len(unique_drops)}")
 
-# 5. Strict Artist Matching (No false positive substring matches!)
+# 5. Strict Artist Matching (Only favorite artists match!)
 fav_albums = []
 fav_singles = []
 general_albums = []
@@ -140,13 +145,12 @@ general_singles = []
 
 for drop in unique_drops:
     art_lower = drop['artist'].lower()
-    # Split multi-artist string into individual artist names
     artist_tokens = [t.strip() for t in re.split(r'[,&;]|\bfeat\b|\bft\b|\bwith\b', art_lower) if t.strip()]
     
     is_fav = False
     for token in artist_tokens:
         for fav in favorite_artists:
-            if fav == token or re.search(r'\b' + re.escape(fav) + r'\b', token):
+            if fav == token or (len(fav) >= 3 and fav in token):
                 is_fav = True
                 break
         if is_fav:
@@ -232,4 +236,4 @@ else:
     for c in chunks:
         send_tg_message(c)
 
-print("Perfect Release Radar completed!")
+print("Clean Deduplicated Release Radar completed!")
