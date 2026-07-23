@@ -4,6 +4,7 @@ import urllib.request
 import urllib.parse
 import xml.etree.ElementTree as ET
 import re
+import html
 from datetime import datetime, timedelta
 
 # Auto-load .env file if available
@@ -19,9 +20,9 @@ if os.path.exists(env_path):
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
-print("Starting Fast Direct Spotify Release Radar Pipeline...")
+print("Starting Ultimate Spotify Release Radar Pipeline...")
 
-# 1. Fetch ALL favorite artists from Postgres database
+# 1. Fetch ALL 229 favorite artists from Postgres database
 import subprocess
 artists_output = subprocess.check_output("docker exec -i $(docker ps -q -f name=postgres | head -n 1) psql -U n8n -d n8n -t -c 'SELECT name FROM artists;'", shell=True).decode('utf-8')
 favorite_artists = set(line.strip().lower() for line in artists_output.split('\n') if line.strip())
@@ -39,13 +40,14 @@ for ch in channels:
             xml_data = resp.read().decode('utf-8')
             root = ET.fromstring(xml_data)
             items = root.findall('.//item')
-            for item in items[:15]:
+            for item in items[:20]:
                 desc = item.find('description').text if item.find('description') is not None else ''
                 clean = re.sub(r'<[^>]+>', '\n', desc)
+                clean = html.unescape(clean)
                 for line in clean.split('\n'):
                     line = line.strip()
-                    if line.startswith('•') or line.startswith('-') or line.startswith('—'):
-                        cleaned_line = line.lstrip('•—-* ').strip()
+                    if line.startswith('•') or line.startswith('-') or line.startswith('—') or (len(line) > 2 and line[0].isdigit() and (line[1] == '.' or line[2] == '.')):
+                        cleaned_line = re.sub(r'^[•—\-*\d.\s]+', '', line).strip()
                         if '—' in cleaned_line or '-' in cleaned_line:
                             parts = re.split(r'\s+[—\-]\s+', cleaned_line, 1)
                             if len(parts) == 2:
@@ -61,7 +63,7 @@ for ch in channels:
 
 # Also check iTunes Search API for favorite artists (last 14 days)
 date_cutoff = datetime.now() - timedelta(days=14)
-for artist in list(favorite_artists)[:35]:
+for artist in list(favorite_artists)[:45]:
     try:
         url = f"https://itunes.apple.com/search?term={urllib.parse.quote(artist)}&entity=album&country=RU&limit=3"
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
@@ -82,11 +84,18 @@ for artist in list(favorite_artists)[:35]:
 # Deduplicate all drops & build Spotify search URLs
 dedup_drops = {}
 for d in all_parsed_drops:
-    key = f"{d['artist'].lower()}_{d['title'].lower()}"
+    # Clean HTML unescaping
+    art_clean = html.unescape(d['artist']).strip()
+    trk_clean = html.unescape(d['title']).strip()
+    
+    key = f"{art_clean.lower()}_{trk_clean.lower()}"
     if key not in dedup_drops:
-        search_q = urllib.parse.quote(f"{d['artist']} {d['title']}")
-        d['url'] = f"https://open.spotify.com/search/{search_q}"
-        dedup_drops[key] = d
+        search_q = urllib.parse.quote(f"{art_clean} {trk_clean}")
+        dedup_drops[key] = {
+            'artist': art_clean,
+            'title': trk_clean,
+            'url': f"https://open.spotify.com/search/{search_q}"
+        }
 
 unique_drops = list(dedup_drops.values())
 print(f"Total unique drops gathered: {len(unique_drops)}")
@@ -109,22 +118,22 @@ for drop in unique_drops:
 
 print(f"Favorites drops found: {len(taste_list)} | General drops found: {len(general_list)}")
 
-# 4. Build Telegram Markdown message directly (Instant & 100% Reliable)
+# 4. Build Clean Telegram Markdown message (NO '---', NO '&amp;', NO troetochia)
 msg_lines = ["🔥 *ПЯТНИЧНЫЙ МУЗЫКАЛЬНЫЙ РАДАР РЕЛИЗОВ* 🔥\n"]
 
 if taste_list:
     msg_lines.append("🎧 *Твои любимые артисты*\n")
     for item in taste_list:
         msg_lines.append(f"• [{item['artist']} — {item['title']}]({item['url']})")
-    msg_lines.append("\n---\n")
+    msg_lines.append("\n")
 
 if general_list:
     msg_lines.append("⚡️ *Горячие новинки недели (РФ и Запад)*\n")
-    for item in general_list[:25]:
+    for item in general_list[:30]:
         msg_lines.append(f"• [{item['artist']} — {item['title']}]({item['url']})")
-    msg_lines.append("\n---")
+    msg_lines.append("\n")
 
-msg_lines.append("\nНажмите на любой релиз, чтобы открыть его в Spotify! 🎧✨")
+msg_lines.append("Нажмите на любой релиз, чтобы открыть его в Spotify! 🎧✨")
 digest_text = "\n".join(msg_lines)
 
 # 5. Send to Telegram
@@ -143,4 +152,4 @@ try:
 except Exception as e:
     print("Telegram send error:", e)
 
-print("Fast 25+ Spotify Release Radar completed!")
+print("Ultimate Spotify Release Radar completed!")
