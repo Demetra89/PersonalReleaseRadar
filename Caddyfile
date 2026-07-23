@@ -1,0 +1,11 @@
+{$DOMAIN_NAME:localhost} {
+    # Маршрутизация RSSHub для Telegram каналов (например, /telegram/channel/cloudeluxe)
+    handle /telegram/* {
+        reverse_proxy rsshub:1200
+    }
+
+    # Основной веб-интерфейс и вебхуки n8n
+    handle {
+        reverse_proxy n8n:5678
+    }
+}
