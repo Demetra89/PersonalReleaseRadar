@@ -20,9 +20,9 @@ if os.path.exists(env_path):
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
-print("Starting Global Unlimited Spotify Release Radar Pipeline...")
+print("Starting Multi-Provider (Deezer + Telegram + iTunes) Release Radar...")
 
-# 1. Fetch ALL 229 favorite artists from Postgres database
+# 1. Fetch ALL favorite artists from Postgres database
 import subprocess
 artists_output = subprocess.check_output("docker exec -i $(docker ps -q -f name=postgres | head -n 1) psql -U n8n -d n8n -t -c 'SELECT name FROM artists;'", shell=True).decode('utf-8')
 favorite_artists = set(line.strip().lower() for line in artists_output.split('\n') if line.strip())
@@ -30,8 +30,37 @@ print(f"Loaded ALL {len(favorite_artists)} favorite artists from database.")
 
 channels = ['cloudeluxe', 'USANEWRAP', 'rhymesm', 'theflow']
 all_parsed_drops = []
+date_cutoff = datetime.now() - timedelta(days=14)
 
-# 2. Parse full post text from Telegram channels (RU/Western drop lists)
+# 2. Check Deezer API for ALL favorite artists (Global & Western & RU)
+for artist in list(favorite_artists):
+    try:
+        url_art = f"https://api.deezer.com/search/artist?q={urllib.parse.quote(artist)}"
+        req_art = urllib.request.Request(url_art, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req_art, timeout=2.5) as resp:
+            data_art = json.loads(resp.read().decode('utf-8'))
+            art_items = data_art.get('data', [])
+            if art_items:
+                art_id = art_items[0]['id']
+                art_name = art_items[0]['name']
+                
+                url_alb = f"https://api.deezer.com/artist/{art_id}/albums?limit=5"
+                req_alb = urllib.request.Request(url_alb, headers={'User-Agent': 'Mozilla/5.0'})
+                with urllib.request.urlopen(req_alb, timeout=2.5) as resp_alb:
+                    data_alb = json.loads(resp_alb.read().decode('utf-8'))
+                    for alb in data_alb.get('data', []):
+                        rel_date_str = alb.get('release_date')
+                        if rel_date_str:
+                            rel_date = datetime.strptime(rel_date_str, '%Y-%m-%d')
+                            if rel_date >= date_cutoff:
+                                all_parsed_drops.append({
+                                    'artist': art_name,
+                                    'title': alb.get('title')
+                                })
+    except Exception as e:
+        pass
+
+# 3. Parse full post text from Telegram channels
 for ch in channels:
     try:
         url = f'http://144.31.148.133/telegram/channel/{ch}'
@@ -65,27 +94,6 @@ for ch in channels:
     except Exception as e:
         pass
 
-# 3. Check iTunes Search API for ALL favorite Western & RU artists (last 14 days)
-date_cutoff = datetime.now() - timedelta(days=14)
-for artist in list(favorite_artists):
-    for country in ['US', 'RU']:
-        try:
-            url = f"https://itunes.apple.com/search?term={urllib.parse.quote(artist)}&entity=album&country={country}&limit=3"
-            req = urllib.request.Request(url, headers={'User-Agent': 'iTunes/12.9.5 (Windows; N)'})
-            with urllib.request.urlopen(req, timeout=1.5) as resp:
-                data = json.loads(resp.read().decode('utf-8'))
-                for album in data.get('results', []):
-                    rel_date_str = album.get('releaseDate')
-                    if rel_date_str:
-                        rel_date = datetime.strptime(rel_date_str.split('T')[0], '%Y-%m-%d')
-                        if rel_date >= date_cutoff:
-                            all_parsed_drops.append({
-                                'artist': album.get('artistName'),
-                                'title': album.get('collectionName')
-                            })
-        except Exception as e:
-            pass
-
 # Deduplicate all drops & build Spotify search URLs
 dedup_drops = {}
 for d in all_parsed_drops:
@@ -102,7 +110,7 @@ for d in all_parsed_drops:
         }
 
 unique_drops = list(dedup_drops.values())
-print(f"Total clean unique drops gathered globally: {len(unique_drops)}")
+print(f"Total clean unique drops gathered via Deezer & Telegram: {len(unique_drops)}")
 
 # 4. Categorize drops strictly: FAVORITES vs GENERAL
 taste_list = []
@@ -140,7 +148,7 @@ if general_list:
 msg_lines.append("Нажмите на любой релиз, чтобы открыть его в Spotify! 🎧✨")
 digest_text = "\n".join(msg_lines)
 
-# Split message into chunks if > 4000 chars (Telegram max message limit is 4096 chars)
+# Split message into chunks if > 3800 chars
 def send_tg_message(text):
     tg_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     tg_body = json.dumps({
@@ -159,7 +167,6 @@ def send_tg_message(text):
 if len(digest_text) <= 3800:
     send_tg_message(digest_text)
 else:
-    # Send in clean chunks
     chunks = []
     curr = ""
     for line in digest_text.split('\n'):
@@ -173,4 +180,4 @@ else:
     for c in chunks:
         send_tg_message(c)
 
-print("Global Unlimited Release Radar completed!")
+print("Deezer + Telegram Release Radar completed!")
