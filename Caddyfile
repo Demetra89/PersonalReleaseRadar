@@ -1,4 +1,4 @@
-http://144.31.148.133, {$DOMAIN_NAME:localhost} {
+http://144.31.148.133.sslip.io, http://144.31.148.133 {
     # Маршрутизация RSSHub для Telegram каналов (например, /telegram/channel/cloudeluxe)
     handle /telegram/* {
         reverse_proxy rsshub:1200
