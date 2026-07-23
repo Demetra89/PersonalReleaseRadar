@@ -4,6 +4,16 @@ import urllib.request
 import urllib.parse
 from datetime import datetime, timedelta
 
+# Auto-load .env file if available
+env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), '.env')
+if os.path.exists(env_path):
+    with open(env_path, 'r', encoding='utf-8') as f:
+        for line in f:
+            line = line.strip()
+            if line and not line.startswith('#') and '=' in line:
+                key, val = line.split('=', 1)
+                os.environ[key.strip()] = val.strip()
+
 # Environment variables
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
@@ -18,11 +28,11 @@ artists_output = subprocess.check_output("docker exec -i $(docker ps -q -f name=
 artists = [line.strip() for line in artists_output.split('\n') if line.strip()]
 print(f"Loaded {len(artists)} artists from database.")
 
-# 2. Check iTunes API for new releases (last 14 days for testing)
+# 2. Check iTunes API for new releases (last 30 days for rich test results)
 new_releases = []
-seven_days_ago = datetime.now() - timedelta(days=14)
+thirty_days_ago = datetime.now() - timedelta(days=30)
 
-for artist in artists[:20]:
+for artist in artists[:25]:
     try:
         url = f"https://itunes.apple.com/search?term={urllib.parse.quote(artist)}&entity=album&limit=3"
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
@@ -33,7 +43,7 @@ for artist in artists[:20]:
                 rel_date_str = album.get('releaseDate')
                 if rel_date_str:
                     rel_date = datetime.strptime(rel_date_str.split('T')[0], '%Y-%m-%d')
-                    if rel_date >= seven_days_ago:
+                    if rel_date >= thirty_days_ago:
                         new_releases.append({
                             'artist': album.get('artistName'),
                             'title': album.get('collectionName'),
