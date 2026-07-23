@@ -14,27 +14,26 @@ if os.path.exists(env_path):
                 key, val = line.split('=', 1)
                 os.environ[key.strip()] = val.strip()
 
-# Environment variables
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 LASTFM_API_KEY = os.environ.get("LASTFM_API_KEY")
 
-print("Starting test run of Friday Release Radar Pipeline...")
+print("Starting Enhanced Release Radar Pipeline...")
 
-# 1. Fetch artists from Postgres
+# 1. Fetch ALL artists from Postgres
 import subprocess
 artists_output = subprocess.check_output("docker exec -i $(docker ps -q -f name=postgres | head -n 1) psql -U n8n -d n8n -t -c 'SELECT name FROM artists;'", shell=True).decode('utf-8')
 artists = [line.strip() for line in artists_output.split('\n') if line.strip()]
-print(f"Loaded {len(artists)} artists from database.")
+print(f"Loaded ALL {len(artists)} artists from database.")
 
-# 2. Check iTunes API for new releases (last 30 days for rich test results)
+# 2. Check iTunes API with country=RU for recent releases (last 90 days to catch big drops like SALUKI)
 new_releases = []
-thirty_days_ago = datetime.now() - timedelta(days=30)
+date_cutoff = datetime.now() - timedelta(days=90)
 
-for artist in artists[:25]:
+for artist in artists:
     try:
-        url = f"https://itunes.apple.com/search?term={urllib.parse.quote(artist)}&entity=album&limit=3"
+        url = f"https://itunes.apple.com/search?term={urllib.parse.quote(artist)}&entity=album&country=RU&limit=5"
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
         with urllib.request.urlopen(req, timeout=5) as resp:
             data = json.loads(resp.read().decode('utf-8'))
@@ -43,33 +42,117 @@ for artist in artists[:25]:
                 rel_date_str = album.get('releaseDate')
                 if rel_date_str:
                     rel_date = datetime.strptime(rel_date_str.split('T')[0], '%Y-%m-%d')
-                    if rel_date >= thirty_days_ago:
+                    if rel_date >= date_cutoff:
                         new_releases.append({
                             'artist': album.get('artistName'),
                             'title': album.get('collectionName'),
                             'release_type': 'album' if album.get('collectionType') == 'Album' else 'single',
                             'source': 'taste',
                             'url': album.get('collectionViewUrl'),
-                            'match_reason': 'Из вашего списка любимых артистов'
+                            'release_date': album.get('releaseDate').split('T')[0],
+                            'match_reason': f'Любимый исполнитель: {artist}'
                         })
     except Exception as e:
         pass
 
-print(f"Found {len(new_releases)} releases from iTunes API.")
+print(f"Found {len(new_releases)} releases from iTunes API across ALL artists.")
 
-# 3. Format final message with Gemini
-prompt = f"""Ты собираешь для меня пятничный дайджест новой музыки в Telegram.
-На вход дают JSON со списком релизов, у каждого элемента есть:
-artist, title, release_type, source (taste / ru_cloud / us_rap), url (если есть), match_reason.
+# 3. Add Last.fm Similar Artists
+similar_artists = set()
+for artist in artists[:10]:
+    try:
+        url = f"https://ws.audioscrobbler.com/2.0/?method=artist.getsimilar&artist={urllib.parse.quote(artist)}&api_key={LASTFM_API_KEY}&format=json&limit=3"
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read().decode('utf-8'))
+            for sim in data.get('similarartists', {}).get('artist', []):
+                similar_artists.add(sim.get('name'))
+    except Exception as e:
+        pass
+
+print(f"Found {len(similar_artists)} similar artists from Last.fm.")
+
+# Fetch releases for top 10 similar artists
+for sim_artist in list(similar_artists)[:10]:
+    try:
+        url = f"https://itunes.apple.com/search?term={urllib.parse.quote(sim_artist)}&entity=album&country=RU&limit=2"
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read().decode('utf-8'))
+            results = data.get('results', [])
+            for album in results:
+                rel_date_str = album.get('releaseDate')
+                if rel_date_str:
+                    rel_date = datetime.strptime(rel_date_str.split('T')[0], '%Y-%m-%d')
+                    if rel_date >= date_cutoff:
+                        new_releases.append({
+                            'artist': album.get('artistName'),
+                            'title': album.get('collectionName'),
+                            'release_type': 'album' if album.get('collectionType') == 'Album' else 'single',
+                            'source': 'similar',
+                            'url': album.get('collectionViewUrl'),
+                            'release_date': album.get('releaseDate').split('T')[0],
+                            'match_reason': f'Похож на твоих артистов ({sim_artist})'
+                        })
+    except Exception as e:
+        pass
+
+# 4. Fetch RSS feeds for RU & US channels
+rss_channels = [
+    ('cloudeluxe', 'ru_cloud'),
+    ('theflow', 'ru_cloud'),
+    ('USANEWRAP', 'us_rap')
+]
+
+for channel_name, source_tag in rss_channels:
+    try:
+        url = f"http://localhost:1200/telegram/channel/{channel_name}"
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            content = resp.read().decode('utf-8')
+            import re
+            titles = re.findall(r'<title><!\[CDATA\[(.*?)\]\]></title>', content)
+            for t in titles[:5]:
+                if len(t) > 10 and not 'http' in t:
+                    new_releases.append({
+                        'artist': 'Telegram Feed',
+                        'title': t[:80],
+                        'release_type': 'news',
+                        'source': source_tag,
+                        'url': f"https://t.me/{channel_name}",
+                        'match_reason': f'Тренды из @{channel_name}'
+                    })
+    except Exception as e:
+        pass
+
+print(f"Total pool of releases gathered: {len(new_releases)}")
+
+# 5. Deduplicate releases
+dedup_map = {}
+for r in new_releases:
+    key = f"{r['artist'].lower()}_{r['title'].lower()}"
+    if key not in dedup_map:
+        dedup_map[key] = r
+
+final_pool = list(dedup_map.values())
+
+# 6. Format final message with Gemini
+prompt = f"""Ты собираешь для меня музыкальный дайджест в Telegram.
+На вход дают JSON со списком релизов и новостей:
+artist, title, release_type, source (taste / similar / ru_cloud / us_rap), url, match_reason.
 
 Правила:
-- Раздели вывод на секции по source с понятными заголовками: "🎧 Новое от твоих артистов", "☁️ RU cloud/андеграунд", "🇺🇸 US рэп"
-- В секции "твои артисты" коротко (1 фраза) укажи, почему это может зайти, используя match_reason
-- Формат — Markdown для Telegram (используй *bold*, не используй заголовки H1/H2)
-- Максимум 15 релизов в сообщении
+- Раздели вывод на 3 четкие секции:
+  1. "🎧 *Твои артисты*" (источники taste)
+  2. "🔥 *Похожая музыка*" (источники similar)
+  3. "🌐 *Главное в РФ и на Западе*" (источники ru_cloud и us_rap)
+- Указывай прямые ссылки на альбомы/треки из url
+- В секциях "Твои артисты" и "Похожая музыка" укажи коротко (1 фраза) причину рекомендаций
+- Формат — идеальный Markdown для Telegram (bold, ссылки [название](url), без заголовков #)
+- Максимум 15-20 лучших релизов суммарно
 
 Данные:
-{json.dumps(new_releases, ensure_ascii=False)}
+{json.dumps(final_pool[:30], ensure_ascii=False)}
 """
 
 gemini_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key={GEMINI_API_KEY}"
@@ -83,9 +166,8 @@ try:
         digest_text = res['candidates'][0]['content']['parts'][0]['text']
 except Exception as e:
     print("Gemini API error:", e)
-    digest_text = "🎧 *Пятничный дайджест*\n\nНа этой неделе новых релизов не нашлось."
 
-# 4. Send to Telegram
+# 7. Send to Telegram
 tg_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
 tg_body = json.dumps({
     "chat_id": TELEGRAM_CHAT_ID,
@@ -100,4 +182,4 @@ try:
 except Exception as e:
     print("Telegram send error:", e)
 
-print("Test run completed!")
+print("Enhanced test run completed!")
