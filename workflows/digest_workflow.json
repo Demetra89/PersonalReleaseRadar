@@ -22,87 +22,58 @@
     },
     {
       "parameters": {
-        "url": "https://api.spotify.com/v1/me/following?type=artist&limit=50",
-        "authentication": "genericCredentialType",
-        "genericAuthType": "oAuth2Api",
-        "options": {}
+        "operation": "executeQuery",
+        "query": "SELECT name FROM artists ORDER BY added_at DESC LIMIT 30;"
       },
       "id": "2",
-      "name": "Spotify Followed Artists",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [320, 180],
+      "name": "Postgres (Get Favorite Artists)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [320, 260],
       "credentials": {
-        "oAuth2Api": {
-          "id": "spotify_oauth",
-          "name": "Spotify OAuth2"
+        "postgres": {
+          "id": "postgres_cred",
+          "name": "Postgres local"
         }
       }
     },
     {
       "parameters": {
-        "url": "https://api.spotify.com/v1/me/top/artists?time_range=medium_term&limit=10",
-        "authentication": "genericCredentialType",
-        "genericAuthType": "oAuth2Api",
+        "url": "=https://ws.audioscrobbler.com/2.0/?method=artist.getsimilar&artist={{ encodeURIComponent($json.name) }}&api_key={{ $env.LASTFM_API_KEY }}&format=json&limit=3",
         "options": {}
       },
       "id": "3",
-      "name": "Spotify Top Artists",
+      "name": "Last.fm (Similar Artists)",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [320, 340],
-      "credentials": {
-        "oAuth2Api": {
-          "id": "spotify_oauth",
-          "name": "Spotify OAuth2"
-        }
-      }
+      "position": [540, 360]
     },
     {
       "parameters": {
-        "url": "=https://ws.audioscrobbler.com/2.0/?method=artist.getsimilar&artist={{ encodeURIComponent($json.name) }}&api_key={{ $env.LASTFM_API_KEY }}&format=json&limit=5",
-        "options": {}
+        "jsCode": "// Слияние основных артистов из БД и похожих из Last.fm\nconst artistMap = new Map();\n\nconst dbItems = $items(\"Postgres (Get Favorite Artists)\");\nfor (const item of dbItems) {\n  if (item.json.name) {\n    artistMap.set(item.json.name.toLowerCase(), {\n      name: item.json.name,\n      source: 'favorite',\n      match_reason: 'Ваш любимый артист'\n    });\n  }\n}\n\nconst lastfmItems = $items(\"Last.fm (Similar Artists)\");\nfor (const item of lastfmItems) {\n  const similar = item.json.similarartists?.artist || [];\n  for (const a of similar) {\n    const key = a.name.toLowerCase();\n    if (!artistMap.has(key)) {\n      artistMap.set(key, {\n        name: a.name,\n        source: 'similar',\n        match_reason: 'Похож на ваших любимых исполнителей'\n      });\n    }\n  }\n}\n\nreturn Array.from(artistMap.values()).map(a => ({ json: a }));"
       },
       "id": "4",
-      "name": "Last.fm Similar Artists",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [540, 340]
-    },
-    {
-      "parameters": {
-        "jsCode": "// Слияние артистов из Spotify (followed, top) и Last.fm (similar)\nconst artistMap = new Map();\n\n// 1. Followed Artists\nconst followedItems = $items(\"Spotify Followed Artists\");\nfor (const item of followedItems) {\n  const artists = item.json.artists?.items || [];\n  for (const a of artists) {\n    artistMap.set(a.id, { id: a.id, name: a.name, source: 'followed', match_reason: 'Артист из ваших подписок' });\n  }\n}\n\n// 2. Top Artists\nconst topItems = $items(\"Spotify Top Artists\");\nfor (const item of topItems) {\n  const artists = item.json.items || [];\n  for (const a of artists) {\n    if (!artistMap.has(a.id)) {\n      artistMap.set(a.id, { id: a.id, name: a.name, source: 'top', match_reason: 'Ваш часто слушаемый артист' });\n    }\n  }\n}\n\n// 3. Similar Artists from Last.fm\nconst lastfmItems = $items(\"Last.fm Similar Artists\");\nfor (const item of lastfmItems) {\n  const similar = item.json.similarartists?.artist || [];\n  for (const a of similar) {\n    if (!Array.from(artistMap.values()).some(existing => existing.name.toLowerCase() === a.name.toLowerCase())) {\n      artistMap.set(`lastfm_${a.name}`, { id: null, name: a.name, source: 'similar', match_reason: `Похож на вашего любимого артиста` });\n    }\n  }\n}\n\nreturn Array.from(artistMap.values()).map(a => ({ json: a }));"
-      },
-      "id": "5",
-      "name": "Code (Merge Artists)",
+      "name": "Code (Merge Artists Pool)",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [760, 260]
     },
     {
       "parameters": {
-        "url": "=https://api.spotify.com/v1/artists/{{ $json.id }}/albums?include_groups=album,single&limit=10",
-        "authentication": "genericCredentialType",
-        "genericAuthType": "oAuth2Api",
+        "url": "=https://itunes.apple.com/search?term={{ encodeURIComponent($json.name) }}&entity=album&limit=5",
         "options": {}
       },
-      "id": "6",
-      "name": "Spotify Get Artist Albums",
+      "id": "5",
+      "name": "iTunes API (Get Releases)",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [980, 260],
-      "credentials": {
-        "oAuth2Api": {
-          "id": "spotify_oauth",
-          "name": "Spotify OAuth2"
-        }
-      }
+      "position": [980, 260]
     },
     {
       "parameters": {
-        "jsCode": "// Фильтр альбомов за последние 7 дней\nconst releases = [];\nconst now = new Date();\nconst sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);\n\nfor (const item of $input.all()) {\n  const albums = item.json.items || [];\n  const artistInfo = item.json._artistInfo || {};\n  for (const album of albums) {\n    const releaseDate = new Date(album.release_date);\n    if (releaseDate >= sevenDaysAgo) {\n      releases.push({\n        json: {\n          artist: album.artists.map(a => a.name).join(', '),\n          title: album.name,\n          release_type: album.album_type,\n          source: 'taste',\n          url: album.external_urls?.spotify || null,\n          release_date: album.release_date,\n          match_reason: 'Из ваших подписок / топа Spotify'\n        }\n      });\n    }\n  }\n}\nreturn releases;"
+        "jsCode": "// Фильтр релизов за последние 7 дней из iTunes API\nconst releases = [];\nconst now = new Date();\nconst sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);\n\nfor (const item of $input.all()) {\n  const results = item.json.results || [];\n  for (const album of results) {\n    if (album.releaseDate) {\n      const releaseDate = new Date(album.releaseDate);\n      if (releaseDate >= sevenDaysAgo) {\n        releases.push({\n          json: {\n            artist: album.artistName,\n            title: album.collectionName,\n            release_type: album.collectionType === 'Album' ? 'album' : 'single',\n            source: 'taste',\n            url: album.collectionViewUrl || null,\n            release_date: album.releaseDate.split('T')[0],\n            match_reason: 'Из вашего списка любимых артистов'\n          }\n        });\n      }\n    }\n  }\n}\nreturn releases;"
       },
-      "id": "7",
+      "id": "6",
       "name": "Code (Filter Taste 7 Days)",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -112,7 +83,7 @@
       "parameters": {
         "url": "http://rsshub:1200/telegram/channel/cloudeluxe"
       },
-      "id": "8",
+      "id": "7",
       "name": "RSS Read (@cloudeluxe)",
       "type": "n8n-nodes-base.rssFeedRead",
       "typeVersion": 1.1,
@@ -122,7 +93,7 @@
       "parameters": {
         "url": "http://rsshub:1200/telegram/channel/USANEWRAP"
       },
-      "id": "9",
+      "id": "8",
       "name": "RSS Read (@USANEWRAP)",
       "type": "n8n-nodes-base.rssFeedRead",
       "typeVersion": 1.1,
@@ -133,7 +104,7 @@
         "operation": "executeQuery",
         "query": "SELECT channel, message_id FROM seen_telegram_posts;"
       },
-      "id": "10",
+      "id": "9",
       "name": "Postgres (Check Seen Posts)",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.4,
@@ -154,7 +125,7 @@
         "jsonBody": "={\n  \"contents\": [\n    {\n      \"parts\": [\n        {\n          \"text\": \"Ты — классификатор музыкальных новостей. Тебе присылают текст поста из телеграм-канала о музыке. Определи, анонсирует ли пост НОВЫЙ релиз (сингл, альбом, снипет с датой выхода, дроп) конкретного артиста, или нет (мемы, драма между артистами, тур-новости, реклама, просто фото/цитата без релиза).\\n\\nВерни строго JSON без markdown-обёртки и пояснений:\\n{\\n  \\\"is_release\\\": true/false,\\n  \\\"artist\\\": \\\"имя артиста или null\\\",\\n  \\\"title\\\": \\\"название трека/альбома или null\\\",\\n  \\\"release_type\\\": \\\"single/album/snippet/unknown\\\",\\n  \\\"confidence\\\": 0.0-1.0\\n}\\n\\nЕсли не уверен — ставь is_release: false.\\n\\nТекст поста:\\n\" + JSON.stringify($json.contentSnippet || $json.title)\n        }\n      ]\n    }\n  ]\n}",
         "options": {}
       },
-      "id": "11",
+      "id": "10",
       "name": "Gemini Classifier (Post)",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
@@ -164,7 +135,7 @@
       "parameters": {
         "jsCode": "// Парсинг JSON ответа Gemini и фильтрация релизов\nconst results = [];\nfor (const item of $input.all()) {\n  try {\n    const text = item.json.candidates[0].content.parts[0].text.trim().replace(/```json|```/g, '');\n    const parsed = JSON.parse(text);\n    if (parsed.is_release && parsed.confidence >= 0.6 && parsed.artist && parsed.title) {\n      results.push({\n        json: {\n          artist: parsed.artist,\n          title: parsed.title,\n          release_type: parsed.release_type,\n          source: item.json._channel === 'cloudeluxe' ? 'ru_cloud' : 'us_rap',\n          url: item.json._link || null\n        }\n      });\n    }\n  } catch (e) {\n    // Пропуск в случае ошибки парсинга\n  }\n}\nreturn results;"
       },
-      "id": "12",
+      "id": "11",
       "name": "Code (Filter Classified)",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -175,7 +146,7 @@
         "mode": "combine",
         "combineBy": "combineAll"
       },
-      "id": "13",
+      "id": "12",
       "name": "Merge All Branches (A/B/C)",
       "type": "n8n-nodes-base.merge",
       "typeVersion": 3,
@@ -186,7 +157,7 @@
         "operation": "executeQuery",
         "query": "SELECT artist_name, track_title FROM sent_releases;"
       },
-      "id": "14",
+      "id": "13",
       "name": "Postgres (Check Sent Releases)",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.4,
@@ -221,7 +192,7 @@
         },
         "options": {}
       },
-      "id": "15",
+      "id": "14",
       "name": "IF Has Releases?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
@@ -236,7 +207,7 @@
         "jsonBody": "={\n  \"contents\": [\n    {\n      \"parts\": [\n        {\n          \"text\": \"Ты собираешь для меня пятничный дайджест новой музыки в Telegram.\\nНа вход дают JSON со списком релизов, у каждого элемента есть:\\nartist, title, release_type, source (taste / ru_cloud / us_rap), url (если есть), match_reason (почему это может понравиться — только для source=taste).\\n\\nПравила:\\n- Раздели вывод на секции по source с понятными заголовками:\\n  \\\"🎧 Новое от твоих артистов\\\", \\\"☁️ RU cloud/андеграунд\\\",\\n  \\\"🇺🇸 US рэп\\\"\\n- В секции \\\"твои артисты\\\" коротко (1 фраза) укажи, почему это может зайти, используя match_reason\\n- Не выдумывай факты, которых нет во входных данных\\n- Формат — Markdown для Telegram (используй *bold*, не используй заголовки H1/H2, не используй лишние эмодзи кроме заголовков секций)\\n- Максимум 15 релизов в сообщении: сначала все из taste, затем ru_cloud и us_rap вперемешку\\n- Если пустая секция — просто её не показывай\\n- Если список релизов вообще пуст — напиши одно короткое дружелюбное предложение в духе \\\"на этой неделе новых релизов не нашлось\\\"\\n\\nДанные:\\n\" + JSON.stringify($input.all().map(i => i.json))\n        }\n      ]\n    }\n  ]\n}",
         "options": {}
       },
-      "id": "16",
+      "id": "15",
       "name": "Gemini Generator (Digest)",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
@@ -250,7 +221,7 @@
           "parse_mode": "Markdown"
         }
       },
-      "id": "17",
+      "id": "16",
       "name": "Telegram (Send Digest)",
       "type": "n8n-nodes-base.telegram",
       "typeVersion": 1.2,
@@ -270,7 +241,7 @@
           "parse_mode": "Markdown"
         }
       },
-      "id": "18",
+      "id": "17",
       "name": "Telegram (Send Empty Message)",
       "type": "n8n-nodes-base.telegram",
       "typeVersion": 1.2,
@@ -288,12 +259,7 @@
       "main": [
         [
           {
-            "node": "Spotify Followed Artists",
-            "type": "main",
-            "index": 0
-          },
-          {
-            "node": "Spotify Top Artists",
+            "node": "Postgres (Get Favorite Artists)",
             "type": "main",
             "index": 0
           },
@@ -310,51 +276,45 @@
         ]
       ]
     },
-    "Spotify Top Artists": {
+    "Postgres (Get Favorite Artists)": {
       "main": [
         [
           {
-            "node": "Last.fm Similar Artists",
+            "node": "Last.fm (Similar Artists)",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Code (Merge Artists Pool)",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Spotify Followed Artists": {
+    "Last.fm (Similar Artists)": {
       "main": [
         [
           {
-            "node": "Code (Merge Artists)",
+            "node": "Code (Merge Artists Pool)",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Last.fm Similar Artists": {
+    "Code (Merge Artists Pool)": {
       "main": [
         [
           {
-            "node": "Code (Merge Artists)",
+            "node": "iTunes API (Get Releases)",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Code (Merge Artists)": {
-      "main": [
-        [
-          {
-            "node": "Spotify Get Artist Albums",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Spotify Get Artist Albums": {
+    "iTunes API (Get Releases)": {
       "main": [
         [
           {
