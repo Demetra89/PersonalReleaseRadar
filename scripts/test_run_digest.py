@@ -20,24 +20,24 @@ if os.path.exists(env_path):
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
-print("Starting Multi-Provider (Deezer + Telegram + iTunes) Release Radar...")
+print("Starting Perfect Release Radar Pipeline...")
 
 # 1. Fetch ALL favorite artists from Postgres database
 import subprocess
 artists_output = subprocess.check_output("docker exec -i $(docker ps -q -f name=postgres | head -n 1) psql -U n8n -d n8n -t -c 'SELECT name FROM artists;'", shell=True).decode('utf-8')
-favorite_artists = set(line.strip().lower() for line in artists_output.split('\n') if line.strip())
-print(f"Loaded ALL {len(favorite_artists)} favorite artists from database.")
+favorite_artists = set(line.strip().lower() for line in artists_output.split('\n') if line.strip() and len(line.strip()) > 1)
+print(f"Loaded {len(favorite_artists)} favorite artists from database.")
 
 channels = ['cloudeluxe', 'USANEWRAP', 'rhymesm', 'theflow']
 all_parsed_drops = []
 date_cutoff = datetime.now() - timedelta(days=14)
 
-# 2. Check Deezer API for ALL favorite artists (Global & Western & RU)
+# 2. Check Deezer API for ALL favorite artists
 for artist in list(favorite_artists):
     try:
         url_art = f"https://api.deezer.com/search/artist?q={urllib.parse.quote(artist)}"
         req_art = urllib.request.Request(url_art, headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req_art, timeout=2.5) as resp:
+        with urllib.request.urlopen(req_art, timeout=2.0) as resp:
             data_art = json.loads(resp.read().decode('utf-8'))
             art_items = data_art.get('data', [])
             if art_items:
@@ -46,16 +46,18 @@ for artist in list(favorite_artists):
                 
                 url_alb = f"https://api.deezer.com/artist/{art_id}/albums?limit=5"
                 req_alb = urllib.request.Request(url_alb, headers={'User-Agent': 'Mozilla/5.0'})
-                with urllib.request.urlopen(req_alb, timeout=2.5) as resp_alb:
+                with urllib.request.urlopen(req_alb, timeout=2.0) as resp_alb:
                     data_alb = json.loads(resp_alb.read().decode('utf-8'))
                     for alb in data_alb.get('data', []):
                         rel_date_str = alb.get('release_date')
                         if rel_date_str:
                             rel_date = datetime.strptime(rel_date_str, '%Y-%m-%d')
                             if rel_date >= date_cutoff:
+                                record_type = 'album' if alb.get('record_type') in ['album', 'ep', 'mup'] else 'single'
                                 all_parsed_drops.append({
                                     'artist': art_name,
-                                    'title': alb.get('title')
+                                    'title': alb.get('title'),
+                                    'type': record_type
                                 })
     except Exception as e:
         pass
@@ -73,11 +75,20 @@ for ch in channels:
                 desc = item.find('description').text if item.find('description') is not None else ''
                 clean = re.sub(r'<[^>]+>', '\n', desc)
                 clean = html.unescape(clean)
+                
+                current_type = 'single'
                 for line in clean.split('\n'):
                     line = line.strip()
                     l_lower = line.lower()
-                    if 'присылайте' in l_lower or 'забыли' in l_lower or 'альбомы:' in l_lower or 'синглы:' in l_lower:
+                    if 'альбомы' in l_lower or 'ep' in l_lower:
+                        current_type = 'album'
                         continue
+                    if 'синглы' in l_lower:
+                        current_type = 'single'
+                        continue
+                    if 'присылайте' in l_lower or 'забыли' in l_lower:
+                        continue
+                    
                     if line.startswith('•') or line.startswith('-') or line.startswith('—') or (len(line) > 2 and line[0].isdigit() and (line[1] == '.' or line[2] == '.')):
                         cleaned_line = re.sub(r'^[•—\-*\d.\s]+', '', line).strip()
                         if '—' in cleaned_line or '-' in cleaned_line:
@@ -89,66 +100,107 @@ for ch in channels:
                                 if len(art_name) > 1 and len(trk_name) > 1 and len(art_name) + len(trk_name) < 75:
                                     all_parsed_drops.append({
                                         'artist': art_name,
-                                        'title': trk_name
+                                        'title': trk_name,
+                                        'type': current_type
                                     })
     except Exception as e:
         pass
 
-# Deduplicate all drops & build Spotify search URLs
+# 4. Strict Deduplication & Title Normalization
 dedup_drops = {}
 for d in all_parsed_drops:
     art_clean = html.unescape(d['artist']).strip()
     trk_clean = html.unescape(d['title']).strip()
     
-    key = f"{art_clean.lower()}_{trk_clean.lower()}"
+    # Strip "- Single", "- EP", "- Album"
+    trk_normalized = re.sub(r'\s*-\s*(single|ep|album)$', '', trk_clean, flags=re.IGNORECASE).strip()
+    
+    # Normalize key by removing punctuation/spaces
+    art_norm_key = re.sub(r'[^a-z0-9а-я]', '', art_clean.lower())
+    trk_norm_key = re.sub(r'[^a-z0-9а-я]', '', trk_normalized.lower())
+    
+    key = f"{art_norm_key}_{trk_norm_key}"
     if key not in dedup_drops:
-        search_q = urllib.parse.quote(f"{art_clean} {trk_clean}")
+        search_q = urllib.parse.quote(f"{art_clean} {trk_normalized}")
         dedup_drops[key] = {
             'artist': art_clean,
-            'title': trk_clean,
+            'title': trk_normalized,
+            'type': d.get('type', 'single'),
             'url': f"https://open.spotify.com/search/{search_q}"
         }
 
 unique_drops = list(dedup_drops.values())
-print(f"Total clean unique drops gathered via Deezer & Telegram: {len(unique_drops)}")
+print(f"Total clean unique drops after strict deduplication: {len(unique_drops)}")
 
-# 4. Categorize drops strictly: FAVORITES vs GENERAL
-taste_list = []
-general_list = []
+# 5. Strict Artist Matching (No false positive substring matches!)
+fav_albums = []
+fav_singles = []
+general_albums = []
+general_singles = []
 
 for drop in unique_drops:
     art_lower = drop['artist'].lower()
+    # Split multi-artist string into individual artist names
+    artist_tokens = [t.strip() for t in re.split(r'[,&;]|\bfeat\b|\bft\b|\bwith\b', art_lower) if t.strip()]
+    
     is_fav = False
-    for fav in favorite_artists:
-        if fav in art_lower or art_lower in fav:
-            is_fav = True
+    for token in artist_tokens:
+        for fav in favorite_artists:
+            if fav == token or re.search(r'\b' + re.escape(fav) + r'\b', token):
+                is_fav = True
+                break
+        if is_fav:
             break
+            
     if is_fav:
-        taste_list.append(drop)
+        if drop['type'] == 'album':
+            fav_albums.append(drop)
+        else:
+            fav_singles.append(drop)
     else:
-        general_list.append(drop)
+        if drop['type'] == 'album':
+            general_albums.append(drop)
+        else:
+            general_singles.append(drop)
 
-print(f"Favorites drops found: {len(taste_list)} | General drops found: {len(general_list)}")
+print(f"Fav Albums: {len(fav_albums)} | Fav Singles: {len(fav_singles)}")
+print(f"General Albums: {len(general_albums)} | General Singles: {len(general_singles)}")
 
-# 5. Build UNLIMITED Telegram Markdown message (All drops, NO cuts)
+# 6. Build Clean Formatted Telegram Message
 msg_lines = ["🔥 *ПЯТНИЧНЫЙ МУЗЫКАЛЬНЫЙ РАДАР РЕЛИЗОВ* 🔥\n"]
 
-if taste_list:
+if fav_albums or fav_singles:
     msg_lines.append("🎧 *Твои любимые артисты*\n")
-    for item in taste_list:
-        msg_lines.append(f"• [{item['artist']} — {item['title']}]({item['url']})")
+    if fav_albums:
+        msg_lines.append("💿 *Альбомы & EP:*")
+        for item in fav_albums:
+            msg_lines.append(f"• [{item['artist']} — {item['title']}]({item['url']})")
+        msg_lines.append("")
+    if fav_singles:
+        msg_lines.append("🎤 *Синглы:*")
+        for item in fav_singles:
+            msg_lines.append(f"• [{item['artist']} — {item['title']}]({item['url']})")
+        msg_lines.append("")
     msg_lines.append("\n")
 
-if general_list:
+if general_albums or general_singles:
     msg_lines.append("⚡️ *Горячие новинки недели (РФ и Запад)*\n")
-    for item in general_list:
-        msg_lines.append(f"• [{item['artist']} — {item['title']}]({item['url']})")
+    if general_albums:
+        msg_lines.append("💿 *Альбомы & EP:*")
+        for item in general_albums:
+            msg_lines.append(f"• [{item['artist']} — {item['title']}]({item['url']})")
+        msg_lines.append("")
+    if general_singles:
+        msg_lines.append("🎤 *Синглы:*")
+        for item in general_singles:
+            msg_lines.append(f"• [{item['artist']} — {item['title']}]({item['url']})")
+        msg_lines.append("")
     msg_lines.append("\n")
 
 msg_lines.append("Нажмите на любой релиз, чтобы открыть его в Spotify! 🎧✨")
 digest_text = "\n".join(msg_lines)
 
-# Split message into chunks if > 3800 chars
+# Split into chunks if needed
 def send_tg_message(text):
     tg_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     tg_body = json.dumps({
@@ -180,4 +232,4 @@ else:
     for c in chunks:
         send_tg_message(c)
 
-print("Deezer + Telegram Release Radar completed!")
+print("Perfect Release Radar completed!")
