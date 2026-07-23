@@ -15,7 +15,7 @@
         }
       },
       "id": "1",
-      "name": "Пятница 10:00 (Trigger)",
+      "name": "Пятница 10:00 MSK (Trigger)",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.1,
       "position": [100, 300]
@@ -39,30 +39,9 @@
     },
     {
       "parameters": {
-        "url": "=https://itunes.apple.com/search?term={{ encodeURIComponent($json.name) }}&entity=album&country=RU&limit=5",
-        "options": {}
-      },
-      "id": "3",
-      "name": "iTunes API (Get Releases)",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [540, 260]
-    },
-    {
-      "parameters": {
-        "jsCode": "// Строгий фильтр релизов любимых артистов за последние 14 дней со ссылками на Spotify\nconst releases = [];\nconst now = new Date();\nconst dateCutoff = new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000);\n\nfor (const item of $input.all()) {\n  const results = item.json.results || [];\n  for (const album of results) {\n    if (album.releaseDate) {\n      const releaseDate = new Date(album.releaseDate);\n      if (releaseDate >= dateCutoff) {\n        const query = encodeURIComponent(`${album.artistName} ${album.collectionName}`);\n        releases.push({\n          json: {\n            artist: album.artistName,\n            title: album.collectionName,\n            release_type: album.collectionType === 'Album' ? 'album' : 'single',\n            source: 'taste',\n            url: `https://open.spotify.com/search/${query}`,\n            release_date: album.releaseDate.split('T')[0]\n          }\n        });\n      }\n    }\n  }\n}\nreturn releases;"
-      },
-      "id": "4",
-      "name": "Code (Filter Taste & Build Spotify Links)",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [760, 260]
-    },
-    {
-      "parameters": {
         "url": "http://rsshub:1200/telegram/channel/cloudeluxe"
       },
-      "id": "5",
+      "id": "3",
       "name": "RSS Read (@cloudeluxe)",
       "type": "n8n-nodes-base.rssFeedRead",
       "typeVersion": 1.1,
@@ -72,7 +51,7 @@
       "parameters": {
         "url": "http://rsshub:1200/telegram/channel/USANEWRAP"
       },
-      "id": "6",
+      "id": "4",
       "name": "RSS Read (@USANEWRAP)",
       "type": "n8n-nodes-base.rssFeedRead",
       "typeVersion": 1.1,
@@ -82,7 +61,7 @@
       "parameters": {
         "url": "http://rsshub:1200/telegram/channel/rhymesm"
       },
-      "id": "7",
+      "id": "5",
       "name": "RSS Read (@rhymesm)",
       "type": "n8n-nodes-base.rssFeedRead",
       "typeVersion": 1.1,
@@ -92,7 +71,7 @@
       "parameters": {
         "url": "http://rsshub:1200/telegram/channel/theflow"
       },
-      "id": "8",
+      "id": "6",
       "name": "RSS Read (@theflow)",
       "type": "n8n-nodes-base.rssFeedRead",
       "typeVersion": 1.1,
@@ -100,54 +79,13 @@
     },
     {
       "parameters": {
-        "method": "POST",
-        "url": "=https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key={{ $env.GEMINI_API_KEY }}",
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={\n  \"contents\": [\n    {\n      \"parts\": [\n        {\n          \"text\": \"Ты — фильтр свежих музыкальных релизов.\\nТебе присылают текст постов из музыкальных телеграм-каналов.\\nВыдели ВСЕ ПОСТЫ, где сообщается о ВЫХОДЕ НОВОГО ТРЕКА/АЛЬБОМА/СИНГЛА/ДРОПА (до 15 штук).\\nИгнорируй мемы, вопросы, рекламу и драмы.\\n\\nВерни строго JSON-массив без markdown-обёртки:\\n[\\n  {\\n    \\\"artist\\\": \\\"Имя исполнителя\\\",\\n    \\\"title\\\": \\\"Название трека или альбома\\\",\\n    \\\"source\\\": \\\"ru_cloud\\\"\\n  }\\n]\\n\\nПосты:\\n\" + JSON.stringify($input.all().map(i => ({ title: i.json.title, link: i.json.link })))\n        }\n      ]\n    }\n  ]\n}",
-        "options": {}
+        "jsCode": "// Парсинг ВСЕХ релизов из постов и построение Spotify Markdown Дайджеста\nconst favArtists = new Set();\nfor (const item of $input.all()) {\n  if (item.json.name) {\n    favArtists.add(item.json.name.toLowerCase());\n  }\n}\n\nconst drops = [];\nconst dedup = new Set();\n\nfor (const item of $input.all()) {\n  const desc = item.json.description || item.json.title || '';\n  const clean = desc.replace(/<[^>]+>/g, '\\n');\n  for (let line of clean.split('\\n')) {\n    line = line.trim();\n    if (line.startswith('•') || line.startswith('-') || line.startswith('—')) {\n      const cleaned = line.replace(/^[•—\-*\\s]+/, '').strip ? line.replace(/^[•—\-*\\s]+/, '').strip() : line.replace(/^[•—\-*\\s]+/, '');\n      if (cleaned.includes('—') || cleaned.includes('-')) {\n        const parts = cleaned.split(/\\s+[—\\-]\\s+/);\n        if (parts.length >= 2) {\n          const art = parts[0].trim();\n          const trk = parts[1].replace(/[«»\"]/g, '').trim();\n          if (art.length > 1 && trk.length > 1) {\n            const key = `${art.toLowerCase()}_${trk.toLowerCase()}`;\n            if (!dedup.has(key)) {\n              dedup.add(key);\n              const searchQ = encodeURIComponent(`${art} ${trk}`);\n              drops.push({\n                artist: art,\n                title: trk,\n                url: `https://open.spotify.com/search/${searchQ}`\n              });\n            }\n          }\n        }\n      }\n    }\n  }\n}\n\nconst tasteList = [];\nconst generalList = [];\n\nfor (const drop of drops) {\n  const artLower = drop.artist.toLowerCase();\n  let isFav = false;\n  for (const fav of favArtists) {\n    if (fav.includes(artLower) || artLower.includes(fav)) {\n      isFav = true;\n      break;\n    }\n  }\n  if (isFav) tasteList.push(drop);\n  else generalList.push(drop);\n}\n\nlet msg = '🔥 *ПЯТНИЧНЫЙ МУЗЫКАЛЬНЫЙ РАДАР РЕЛИЗОВ* 🔥\\n\\n';\nif (tasteList.length > 0) {\n  msg += '🎧 *Твои любимые артисты*\\n\\n';\n  for (const item of tasteList) {\n    msg += `• [${item.artist} — ${item.title}](${item.url})\\n`;\n  }\n  msg += '\\n---\\n\\n';\n}\n\nif (generalList.length > 0) {\n  msg += '⚡️ *Горячие новинки недели (РФ и Запад)*\\n\\n';\n  for (const item of generalList.slice(0, 25)) {\n    msg += `• [${item.artist} — ${item.title}](${item.url})\\n`;\n  }\n  msg += '\\n---\\n\\n';\n}\nmsg += 'Нажмите на любой релиз, чтобы открыть его в Spotify! 🎧✨';\n\nreturn [{ json: { message: msg } }];"
       },
-      "id": "9",
-      "name": "Gemini Classifier (Telegram Drops)",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [760, 640]
-    },
-    {
-      "parameters": {
-        "jsCode": "// Парсинг JSON ответа Gemini и генерация Spotify ссылок\nconst results = [];\nfor (const item of $input.all()) {\n  try {\n    const text = item.json.candidates[0].content.parts[0].text.trim().replace(/```json|```/g, '');\n    const parsed = JSON.parse(text);\n    if (Array.isArray(parsed)) {\n      for (const drop of parsed) {\n        if (drop.artist && drop.title) {\n          const query = encodeURIComponent(`${drop.artist} ${drop.title}`);\n          results.push({\n            json: {\n              artist: drop.artist,\n              title: drop.title,\n              source: drop.source || 'ru_cloud',\n              url: `https://open.spotify.com/search/${query}`\n            }\n          });\n        }\n      }\n    }\n  } catch (e) {\n  }\n}\nreturn results;"
-      },
-      "id": "10",
-      "name": "Code (Parse AI Drops & Spotify Links)",
+      "id": "7",
+      "name": "Code (Parse All Drops & Match Favorites)",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [980, 640]
-    },
-    {
-      "parameters": {
-        "mode": "combine",
-        "combineBy": "combineAll"
-      },
-      "id": "11",
-      "name": "Merge All Fresh Branches",
-      "type": "n8n-nodes-base.merge",
-      "typeVersion": 3,
-      "position": [1200, 450]
-    },
-    {
-      "parameters": {
-        "method": "POST",
-        "url": "=https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key={{ $env.GEMINI_API_KEY }}",
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={\n  \"contents\": [\n    {\n      \"parts\": [\n        {\n          \"text\": \"Ты формируешь ПЯТНИЧНЫЙ МУЗЫКАЛЬНЫЙ РАДАР РЕЛИЗОВ в Telegram.\\nТвоя цель — собрать БОЛЬШОЙ, НАСЫЩЕННЫЙ ДАЙДЖЕСТ (до 15-20 позиций).\\n\\nСформируй 2 чистые секции в Telegram Markdown:\\n1. 🎧 *Твои любимые артисты* (из источника taste)\\n2. ⚡️ *Горячие новинки недели (РФ и Запад)* (из источников ru_cloud и us_rap)\\n\\nПравила:\\n- Приводи прямые ссылки на Spotify из поля url формата [Артист — Название](url)\\n- Не меняй структуру ссылок url из входных данных!\\n- Использовать только Telegram Markdown (*bold*, [ссылка](url)).\\n\\nДанные:\\n\" + JSON.stringify($input.all().map(i => i.json))\n        }\n      ]\n    }\n  ]\n}",
-        "options": {}
-      },
-      "id": "12",
-      "name": "Gemini Generator (Spotify Digest)",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [1420, 450]
+      "position": [760, 640]
     },
     {
       "parameters": {
@@ -155,18 +93,18 @@
         "url": "=https://api.telegram.org/bot{{ $env.TELEGRAM_BOT_TOKEN }}/sendMessage",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={\n  \"chat_id\": \"{{ $env.TELEGRAM_CHAT_ID }}\",\n  \"text\": {{ JSON.stringify($json.candidates[0].content.parts[0].text) }},\n  \"parse_mode\": \"Markdown\",\n  \"disable_web_page_preview\": true\n}",
+        "jsonBody": "={\n  \"chat_id\": \"{{ $env.TELEGRAM_CHAT_ID }}\",\n  \"text\": {{ JSON.stringify($json.message) }},\n  \"parse_mode\": \"Markdown\",\n  \"disable_web_page_preview\": true\n}",
         "options": {}
       },
-      "id": "13",
-      "name": "Telegram (Send Spotify Digest)",
+      "id": "8",
+      "name": "Telegram (Send Full Spotify Digest)",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [1640, 450]
+      "position": [980, 640]
     }
   ],
   "connections": {
-    "Пятница 10:00 (Trigger)": {
+    "Пятница 10:00 MSK (Trigger)": {
       "main": [
         [
           {
@@ -201,29 +139,7 @@
       "main": [
         [
           {
-            "node": "iTunes API (Get Releases)",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "iTunes API (Get Releases)": {
-      "main": [
-        [
-          {
-            "node": "Code (Filter Taste & Build Spotify Links)",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Code (Filter Taste & Build Spotify Links)": {
-      "main": [
-        [
-          {
-            "node": "Merge All Fresh Branches",
+            "node": "Code (Parse All Drops & Match Favorites)",
             "type": "main",
             "index": 0
           }
@@ -234,7 +150,7 @@
       "main": [
         [
           {
-            "node": "Gemini Classifier (Telegram Drops)",
+            "node": "Code (Parse All Drops & Match Favorites)",
             "type": "main",
             "index": 0
           }
@@ -245,7 +161,7 @@
       "main": [
         [
           {
-            "node": "Gemini Classifier (Telegram Drops)",
+            "node": "Code (Parse All Drops & Match Favorites)",
             "type": "main",
             "index": 0
           }
@@ -256,7 +172,7 @@
       "main": [
         [
           {
-            "node": "Gemini Classifier (Telegram Drops)",
+            "node": "Code (Parse All Drops & Match Favorites)",
             "type": "main",
             "index": 0
           }
@@ -267,51 +183,18 @@
       "main": [
         [
           {
-            "node": "Gemini Classifier (Telegram Drops)",
+            "node": "Code (Parse All Drops & Match Favorites)",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Gemini Classifier (Telegram Drops)": {
+    "Code (Parse All Drops & Match Favorites)": {
       "main": [
         [
           {
-            "node": "Code (Parse AI Drops & Spotify Links)",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Code (Parse AI Drops & Spotify Links)": {
-      "main": [
-        [
-          {
-            "node": "Merge All Fresh Branches",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Merge All Fresh Branches": {
-      "main": [
-        [
-          {
-            "node": "Gemini Generator (Spotify Digest)",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Gemini Generator (Spotify Digest)": {
-      "main": [
-        [
-          {
-            "node": "Telegram (Send Spotify Digest)",
+            "node": "Telegram (Send Full Spotify Digest)",
             "type": "main",
             "index": 0
           }
