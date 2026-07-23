@@ -1,0 +1,218 @@
+{
+  "id": "snippets_workflow_01",
+  "name": "Анонсы и Сниппеты к Пятнице (Вторник/Четверг)",
+  "active": true,
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 18 * * 2,4"
+            }
+          ]
+        }
+      },
+      "id": "1",
+      "name": "Вторник и Четверг 18:00 (Trigger)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [100, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT name FROM artists;"
+      },
+      "id": "2",
+      "name": "Postgres (Get Favorite Artists)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [320, 260],
+      "credentials": {
+        "postgres": {
+          "id": "postgres_cred",
+          "name": "Postgres local"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "http://rsshub:1200/telegram/channel/cloudeluxe"
+      },
+      "id": "3",
+      "name": "RSS Read (@cloudeluxe)",
+      "type": "n8n-nodes-base.rssFeedRead",
+      "typeVersion": 1.1,
+      "position": [320, 560]
+    },
+    {
+      "parameters": {
+        "url": "http://rsshub:1200/telegram/channel/USANEWRAP"
+      },
+      "id": "4",
+      "name": "RSS Read (@USANEWRAP)",
+      "type": "n8n-nodes-base.rssFeedRead",
+      "typeVersion": 1.1,
+      "position": [320, 720]
+    },
+    {
+      "parameters": {
+        "url": "http://rsshub:1200/telegram/channel/rhymesm"
+      },
+      "id": "5",
+      "name": "RSS Read (@rhymesm)",
+      "type": "n8n-nodes-base.rssFeedRead",
+      "typeVersion": 1.1,
+      "position": [320, 880]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key={{ $env.GEMINI_API_KEY }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"contents\": [\n    {\n      \"parts\": [\n        {\n          \"text\": \"Ты — классификатор музыкальных анонсов и сниппетов.\\nТебе даны посты из музыкальных телеграм-каналов.\\nВыдели ТОЛЬКО ТЕ ПОСТЫ, где содержатся:\\n- СНИППЕТЫ (отрывки невышедших треков)\\n- АНОНСЫ (объявления даты выхода трека/альбома в пятницу или скоро)\\n- ТИЗЕРЫ или СЛИВЫ предстоящих релизов.\\n\\nИгнорируй уже вышедшие релизы, мемы, рекламу и вопросы.\\n\\nВерни строго JSON-массив без markdown-обёртки:\\n[\\n  {\\n    \\\"artist\\\": \\\"Имя артиста\\\",\\n    \\\"title\\\": \\\"Название трека/альбома или о чем сниппет\\\",\\n    \\\"type\\\": \\\"snippet/announcement/leak\\\",\\n    \\\"details\\\": \\\"короткая суть анонса или когда ждем дроп\\\",\\n    \\\"url\\\": \\\"ссылка на пост\\\"\\n  }\\n]\\n\\nПосты:\\n\" + JSON.stringify($input.all().map(i => ({ title: i.json.title, link: i.json.link })))\n        }\n      ]\n    }\n  ]\n}",
+        "options": {}
+      },
+      "id": "6",
+      "name": "Gemini Classifier (Snippets)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [760, 640]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Парсинг JSON ответа Gemini от классификации сниппетов\nconst results = [];\nfor (const item of $input.all()) {\n  try {\n    const text = item.json.candidates[0].content.parts[0].text.trim().replace(/```json|```/g, '');\n    const parsed = JSON.parse(text);\n    if (Array.isArray(parsed)) {\n      for (const snippet of parsed) {\n        if (snippet.artist && snippet.title) {\n          results.push({\n            json: {\n              artist: snippet.artist,\n              title: snippet.title,\n              type: snippet.type || 'snippet',\n              details: snippet.details || '',\n              url: snippet.url || null\n            }\n          });\n        }\n      }\n    }\n  } catch (e) {\n  }\n}\nreturn results;"
+      },
+      "id": "7",
+      "name": "Code (Parse Snippets)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [980, 640]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key={{ $env.GEMINI_API_KEY }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"contents\": [\n    {\n      \"parts\": [\n        {\n          \"text\": \"Ты составляешь дайджест СНИППЕТОВ И АНОНСОВ перед пятничными дропами в Telegram.\\nЗаголовок: 🔮 *Сниппеты & Ожидаемые дропы к Пятнице*\\n\\nРаздели на секции:\\n1. 🎬 *Сниппеты и тизеры*\\n2. 🗓 *Анонсы релизов к пятнице*\\n\\nПравила:\\n- Делай ссылки на посты в Telegram вида [Артист — Название/Сниппет](url)\\n- Коротко (1 фраза) поясни суть сниппета или дату ожидания дропа\\n- Используй только Telegram Markdown (*bold*, [ссылка](url)).\\n\\nДанные:\\n\" + JSON.stringify($input.all().map(i => i.json))\n        }\n      ]\n    }\n  ]\n}",
+        "options": {}
+      },
+      "id": "8",
+      "name": "Gemini Generator (Snippets Message)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1200, 640]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.telegram.org/bot{{ $env.TELEGRAM_BOT_TOKEN }}/sendMessage",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"chat_id\": \"{{ $env.TELEGRAM_CHAT_ID }}\",\n  \"text\": {{ JSON.stringify($json.candidates[0].content.parts[0].text) }},\n  \"parse_mode\": \"Markdown\",\n  \"disable_web_page_preview\": true\n}",
+        "options": {}
+      },
+      "id": "9",
+      "name": "Telegram (Send Snippets)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1420, 640]
+    }
+  ],
+  "connections": {
+    "Вторник и Четверг 18:00 (Trigger)": {
+      "main": [
+        [
+          {
+            "node": "RSS Read (@cloudeluxe)",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "RSS Read (@USANEWRAP)",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "RSS Read (@rhymesm)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "RSS Read (@cloudeluxe)": {
+      "main": [
+        [
+          {
+            "node": "Gemini Classifier (Snippets)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "RSS Read (@USANEWRAP)": {
+      "main": [
+        [
+          {
+            "node": "Gemini Classifier (Snippets)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "RSS Read (@rhymesm)": {
+      "main": [
+        [
+          {
+            "node": "Gemini Classifier (Snippets)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini Classifier (Snippets)": {
+      "main": [
+        [
+          {
+            "node": "Code (Parse Snippets)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code (Parse Snippets)": {
+      "main": [
+        [
+          {
+            "node": "Gemini Generator (Snippets Message)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini Generator (Snippets Message)": {
+      "main": [
+        [
+          {
+            "node": "Telegram (Send Snippets)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
