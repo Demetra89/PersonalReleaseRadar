@@ -3,6 +3,7 @@ import json
 import urllib.request
 import urllib.parse
 import xml.etree.ElementTree as ET
+import re
 from datetime import datetime, timedelta
 
 # Auto-load .env file if available
@@ -19,141 +20,120 @@ TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
-print("Starting 15-20 Spotify Release Radar Pipeline...")
+print("Starting Full Friday Release Radar Pipeline...")
 
-# Date cutoff: last 14 days to collect a rich pool of 15-20 drops
-date_cutoff = datetime.now() - timedelta(days=14)
-
-# 1. Fetch ALL artists from Postgres
+# 1. Fetch ALL 83 favorite artists from Postgres database
 import subprocess
 artists_output = subprocess.check_output("docker exec -i $(docker ps -q -f name=postgres | head -n 1) psql -U n8n -d n8n -t -c 'SELECT name FROM artists;'", shell=True).decode('utf-8')
-artists = [line.strip() for line in artists_output.split('\n') if line.strip()]
+favorite_artists = set(line.strip().lower() for line in artists_output.split('\n') if line.strip())
+print(f"Loaded ALL {len(favorite_artists)} favorite artists from database.")
 
-fresh_taste_releases = []
-fresh_telegram_releases = []
-
-# 2. Check iTunes API for favorite artists with 14-day window
-for artist in artists:
-    try:
-        url = f"https://itunes.apple.com/search?term={urllib.parse.quote(artist)}&entity=album&country=RU&limit=5"
-        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req, timeout=3) as resp:
-            data = json.loads(resp.read().decode('utf-8'))
-            results = data.get('results', [])
-            for album in results:
-                rel_date_str = album.get('releaseDate')
-                if rel_date_str:
-                    rel_date = datetime.strptime(rel_date_str.split('T')[0], '%Y-%m-%d')
-                    if rel_date >= date_cutoff:
-                        search_q = urllib.parse.quote(f"{album.get('artistName')} {album.get('collectionName')}")
-                        spotify_url = f"https://open.spotify.com/search/{search_q}"
-                        fresh_taste_releases.append({
-                            'artist': album.get('artistName'),
-                            'title': album.get('collectionName'),
-                            'release_type': 'album' if album.get('collectionType') == 'Album' else 'single',
-                            'source': 'taste',
-                            'url': spotify_url,
-                            'release_date': album.get('releaseDate', '').split('T')[0]
-                        })
-    except Exception as e:
-        pass
-
-# 3. Fetch Telegram channel feeds
 channels = ['cloudeluxe', 'USANEWRAP', 'rhymesm', 'theflow']
-tg_posts_for_ai = []
+all_parsed_drops = []
 
+# 2. Parse full post text from Telegram channels
 for ch in channels:
     try:
         url = f'http://144.31.148.133/telegram/channel/{ch}'
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req, timeout=5) as resp:
+        with urllib.request.urlopen(req, timeout=6) as resp:
             xml_data = resp.read().decode('utf-8')
             root = ET.fromstring(xml_data)
             items = root.findall('.//item')
             for item in items[:15]:
-                title = item.find('title').text if item.find('title') is not None else ''
                 desc = item.find('description').text if item.find('description') is not None else ''
-                link = item.find('link').text if item.find('link') is not None else ''
-                import re
-                clean_desc = re.sub(r'<[^>]+>', ' ', desc)
-                tg_posts_for_ai.append({
-                    'channel': ch,
-                    'title': title,
-                    'text': (title + " " + clean_desc)[:300],
-                    'link': link
-                })
+                clean = re.sub(r'<[^>]+>', '\n', desc)
+                # Parse lines with bullet points or dashes
+                for line in clean.split('\n'):
+                    line = line.strip()
+                    if line.startswith('•') or line.startswith('-') or line.startswith('—'):
+                        cleaned_line = line.lstrip('•—-* ').strip()
+                        if '—' in cleaned_line or '-' in cleaned_line:
+                            parts = re.split(r'\s+[—\-]\s+', cleaned_line, 1)
+                            if len(parts) == 2:
+                                art_name = parts[0].strip()
+                                trk_name = parts[1].replace('«', '').replace('»', '').replace('"', '').strip()
+                                if len(art_name) > 1 and len(trk_name) > 1:
+                                    all_parsed_drops.append({
+                                        'artist': art_name,
+                                        'title': trk_name
+                                    })
     except Exception as e:
         pass
 
-# AI Classification of drops
-if tg_posts_for_ai:
-    prompt = f"""Ты — эксперт по музыкальным релизам.
-Проанализируй посты из Телеграм-каналов (cloudeluxe, USANEWRAP, rhymesm, theflow).
-Найди ВСЕ ПОСТЫ, где вышли СВЕЖИЕ ТРЕКИ, АЛЬБОМЫ ИЛИ СИНГЛЫ.
-Отфильтруй мемы, рекламу и вопросы. Выдели до 15 отличных релизов.
-
-Верни JSON-массив объектов:
-[
-  {{
-    "artist": "Имя исполнителя",
-    "title": "Название трека или альбома",
-    "source": "ru_cloud или us_rap"
-  }}
-]
-
-Посты:
-{json.dumps(tg_posts_for_ai, ensure_ascii=False)}
-"""
-
-    gemini_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key={GEMINI_API_KEY}"
+# Also check iTunes Search API for favorite artists (last 14 days)
+date_cutoff = datetime.now() - timedelta(days=14)
+for artist in list(favorite_artists)[:30]:
     try:
-        gemini_body = json.dumps({"contents": [{"parts": [{"text": prompt}]}]}).encode('utf-8')
-        req = urllib.request.Request(gemini_url, data=gemini_body, headers={'Content-Type': 'application/json'})
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            res = json.loads(resp.read().decode('utf-8'))
-            ai_text = res['candidates'][0]['content']['parts'][0]['text'].strip()
-            if '```' in ai_text:
-                ai_text = ai_text.split('```')[1].replace('json', '').strip()
-            classified = json.loads(ai_text)
-            for item in classified:
-                search_q = urllib.parse.quote(f"{item.get('artist')} {item.get('title')}")
-                item['url'] = f"https://open.spotify.com/search/{search_q}"
-                fresh_telegram_releases.append(item)
+        url = f"https://itunes.apple.com/search?term={urllib.parse.quote(artist)}&entity=album&country=RU&limit=3"
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=2) as resp:
+            data = json.loads(resp.read().decode('utf-8'))
+            for album in data.get('results', []):
+                rel_date_str = album.get('releaseDate')
+                if rel_date_str:
+                    rel_date = datetime.strptime(rel_date_str.split('T')[0], '%Y-%m-%d')
+                    if rel_date >= date_cutoff:
+                        all_parsed_drops.append({
+                            'artist': album.get('artistName'),
+                            'title': album.get('collectionName')
+                        })
     except Exception as e:
-        print("Gemini AI classification error:", e)
+        pass
 
-# Deduplicate releases
-dedup_map = {}
-for r in fresh_taste_releases + fresh_telegram_releases:
-    key = f"{r['artist'].lower()}_{r['title'].lower()}"
-    if key not in dedup_map:
-        dedup_map[key] = r
+# Deduplicate all drops
+dedup_drops = {}
+for d in all_parsed_drops:
+    key = f"{d['artist'].lower()}_{d['title'].lower()}"
+    if key not in dedup_drops:
+        search_q = urllib.parse.quote(f"{d['artist']} {d['title']}")
+        d['url'] = f"https://open.spotify.com/search/{search_q}"
+        dedup_drops[key] = d
 
-final_pool = list(dedup_map.values())
-print(f"Total pool of fresh drops for digest: {len(final_pool)}")
+unique_drops = list(dedup_drops.values())
+print(f"Total unique drops gathered: {len(unique_drops)}")
 
-# 4. Generate Digest with Gemini
-prompt_final = f"""Ты собираешь ПЯТНИЧНЫЙ МУЗЫКАЛЬНЫЙ РАДАР РЕЛИЗОВ в Telegram.
-Твоя цель — собрать БОЛЬШОЙ, НАСЫЩЕННЫЙ ДАЙДЖЕСТ (ровно 15-20 позиций).
+# 3. Categorize drops strictly: FAVORITES vs GENERAL
+taste_list = []
+general_list = []
 
-Сформируй 2 раздела:
-1. 🎧 *Твои любимые артисты* (из источника taste)
-2. ⚡️ *Горячие новинки недели (РФ и Запад)* (из источников ru_cloud и us_rap)
+for drop in unique_drops:
+    art_lower = drop['artist'].lower()
+    is_fav = False
+    for fav in favorite_artists:
+        if fav in art_lower or art_lower in fav:
+            is_fav = True
+            break
+    if is_fav:
+        taste_list.append(drop)
+    else:
+        general_list.append(drop)
+
+print(f"Favorites drops found: {len(taste_list)} | General drops found: {len(general_list)}")
+
+# 4. Format final message with Gemini
+prompt = f"""Ты формируешь ПЯТНИЧНЫЙ МУЗЫКАЛЬНЫЙ РАДАР РЕЛИЗОВ в Telegram.
+Твоя цель — сформировать ПОЛНЫЙ, НАСЫЩЕННЫЙ ДАЙДЖЕСТ (20-30 позиций).
+
+Сформируй 2 БОЛЬШИХ РАЗДЕЛА:
+1. 🎧 *Твои любимые артисты* (помести СТРОГО ВСЕ релизы из списка taste_drops: SALUKI, Дора & Toxi$, GONE.Fludd, VILLIAN, midwxst и т.д.)
+2. ⚡️ *Горячие новинки недели (РФ и Запад)* (помести ВСЕ релизы из списка general_drops: ЛСП, SODA LUV, вышел покурить, Мэйби Бэйби, MAYOT, Rico Nasty и т.д.)
 
 ПРАВИЛА ОФОРМЛЕНИЯ ССЫЛОК:
-- Для КАЖДОГО трека/альбома ОБЯЗАТЕЛЬНО делай ссылку на Spotify прямо в названии!
-  Формат: [Артист — Название](url)
-- Категорически запрещено изменять ссылки url из входных данных!
-- Постарайся вывести МАКСИМАЛЬНО МНОГО РЕЛИЗОВ (15-20 штук суммарно), чтобы пользователю было что послушать!
-- Используй только Telegram Markdown (*bold*, [ссылка](url)).
+- Каждая строка: • [{drop['artist']} — {drop['title']}](url)
+- Запрещено менять ссылки url из входных данных!
+- Выведи ВСЕ переданные релизы, не вычеркивай и не сокращай список!
+- Формат — только чистый Telegram Markdown (*bold*, [ссылка](url)).
 
 Данные:
-{json.dumps(final_pool[:25], ensure_ascii=False)}
+Любимые артисты (taste_drops): {json.dumps(taste_list, ensure_ascii=False)}
+Общие новинки (general_drops): {json.dumps(general_list[:20], ensure_ascii=False)}
 """
 
 digest_text = ""
 try:
-    gemini_body = json.dumps({"contents": [{"parts": [{"text": prompt_final}]}]}).encode('utf-8')
+    gemini_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key={GEMINI_API_KEY}"
+    gemini_body = json.dumps({"contents": [{"parts": [{"text": prompt}]}]}).encode('utf-8')
     req = urllib.request.Request(gemini_url, data=gemini_body, headers={'Content-Type': 'application/json'})
     with urllib.request.urlopen(req, timeout=15) as resp:
         res = json.loads(resp.read().decode('utf-8'))
@@ -177,4 +157,4 @@ try:
 except Exception as e:
     print("Telegram send error:", e)
 
-print("15-20 Spotify Release Radar completed!")
+print("Full 20-30 drops pipeline completed!")
