@@ -1,0 +1,487 @@
+{
+  "name": "Пятничный Музыкальный Дайджест-Бот",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 10 * * 5"
+            }
+          ]
+        }
+      },
+      "id": "1",
+      "name": "Пятница 10:00 (Trigger)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [100, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://api.spotify.com/v1/me/following?type=artist&limit=50",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "oAuth2Api",
+        "options": {}
+      },
+      "id": "2",
+      "name": "Spotify Followed Artists",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [320, 180],
+      "credentials": {
+        "oAuth2Api": {
+          "id": "spotify_oauth",
+          "name": "Spotify OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "https://api.spotify.com/v1/me/top/artists?time_range=medium_term&limit=10",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "oAuth2Api",
+        "options": {}
+      },
+      "id": "3",
+      "name": "Spotify Top Artists",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [320, 340],
+      "credentials": {
+        "oAuth2Api": {
+          "id": "spotify_oauth",
+          "name": "Spotify OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "=https://ws.audioscrobbler.com/2.0/?method=artist.getsimilar&artist={{ encodeURIComponent($json.name) }}&api_key={{ $env.LASTFM_API_KEY }}&format=json&limit=5",
+        "options": {}
+      },
+      "id": "4",
+      "name": "Last.fm Similar Artists",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [540, 340]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Слияние артистов из Spotify (followed, top) и Last.fm (similar)\nconst artistMap = new Map();\n\n// 1. Followed Artists\nconst followedItems = $items(\"Spotify Followed Artists\");\nfor (const item of followedItems) {\n  const artists = item.json.artists?.items || [];\n  for (const a of artists) {\n    artistMap.set(a.id, { id: a.id, name: a.name, source: 'followed', match_reason: 'Артист из ваших подписок' });\n  }\n}\n\n// 2. Top Artists\nconst topItems = $items(\"Spotify Top Artists\");\nfor (const item of topItems) {\n  const artists = item.json.items || [];\n  for (const a of artists) {\n    if (!artistMap.has(a.id)) {\n      artistMap.set(a.id, { id: a.id, name: a.name, source: 'top', match_reason: 'Ваш часто слушаемый артист' });\n    }\n  }\n}\n\n// 3. Similar Artists from Last.fm\nconst lastfmItems = $items(\"Last.fm Similar Artists\");\nfor (const item of lastfmItems) {\n  const similar = item.json.similarartists?.artist || [];\n  for (const a of similar) {\n    if (!Array.from(artistMap.values()).some(existing => existing.name.toLowerCase() === a.name.toLowerCase())) {\n      artistMap.set(`lastfm_${a.name}`, { id: null, name: a.name, source: 'similar', match_reason: `Похож на вашего любимого артиста` });\n    }\n  }\n}\n\nreturn Array.from(artistMap.values()).map(a => ({ json: a }));"
+      },
+      "id": "5",
+      "name": "Code (Merge Artists)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [760, 260]
+    },
+    {
+      "parameters": {
+        "url": "=https://api.spotify.com/v1/artists/{{ $json.id }}/albums?include_groups=album,single&limit=10",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "oAuth2Api",
+        "options": {}
+      },
+      "id": "6",
+      "name": "Spotify Get Artist Albums",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [980, 260],
+      "credentials": {
+        "oAuth2Api": {
+          "id": "spotify_oauth",
+          "name": "Spotify OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Фильтр альбомов за последние 7 дней\nconst releases = [];\nconst now = new Date();\nconst sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);\n\nfor (const item of $input.all()) {\n  const albums = item.json.items || [];\n  const artistInfo = item.json._artistInfo || {};\n  for (const album of albums) {\n    const releaseDate = new Date(album.release_date);\n    if (releaseDate >= sevenDaysAgo) {\n      releases.push({\n        json: {\n          artist: album.artists.map(a => a.name).join(', '),\n          title: album.name,\n          release_type: album.album_type,\n          source: 'taste',\n          url: album.external_urls?.spotify || null,\n          release_date: album.release_date,\n          match_reason: 'Из ваших подписок / топа Spotify'\n        }\n      });\n    }\n  }\n}\nreturn releases;"
+      },
+      "id": "7",
+      "name": "Code (Filter Taste 7 Days)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1200, 260]
+    },
+    {
+      "parameters": {
+        "url": "http://rsshub:1200/telegram/channel/cloudeluxe"
+      },
+      "id": "8",
+      "name": "RSS Read (@cloudeluxe)",
+      "type": "n8n-nodes-base.rssFeedRead",
+      "typeVersion": 1.1,
+      "position": [320, 560]
+    },
+    {
+      "parameters": {
+        "url": "http://rsshub:1200/telegram/channel/USANEWRAP"
+      },
+      "id": "9",
+      "name": "RSS Read (@USANEWRAP)",
+      "type": "n8n-nodes-base.rssFeedRead",
+      "typeVersion": 1.1,
+      "position": [320, 720]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT channel, message_id FROM seen_telegram_posts;"
+      },
+      "id": "10",
+      "name": "Postgres (Check Seen Posts)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [540, 640],
+      "credentials": {
+        "postgres": {
+          "id": "postgres_cred",
+          "name": "Postgres local"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={{ $env.GEMINI_API_KEY }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"contents\": [\n    {\n      \"parts\": [\n        {\n          \"text\": \"Ты — классификатор музыкальных новостей. Тебе присылают текст поста из телеграм-канала о музыке. Определи, анонсирует ли пост НОВЫЙ релиз (сингл, альбом, снипет с датой выхода, дроп) конкретного артиста, или нет (мемы, драма между артистами, тур-новости, реклама, просто фото/цитата без релиза).\\n\\nВерни строго JSON без markdown-обёртки и пояснений:\\n{\\n  \\\"is_release\\\": true/false,\\n  \\\"artist\\\": \\\"имя артиста или null\\\",\\n  \\\"title\\\": \\\"название трека/альбома или null\\\",\\n  \\\"release_type\\\": \\\"single/album/snippet/unknown\\\",\\n  \\\"confidence\\\": 0.0-1.0\\n}\\n\\nЕсли не уверен — ставь is_release: false.\\n\\nТекст поста:\\n\" + JSON.stringify($json.contentSnippet || $json.title)\n        }\n      ]\n    }\n  ]\n}",
+        "options": {}
+      },
+      "id": "11",
+      "name": "Gemini Classifier (Post)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [760, 640]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Парсинг JSON ответа Gemini и фильтрация релизов\nconst results = [];\nfor (const item of $input.all()) {\n  try {\n    const text = item.json.candidates[0].content.parts[0].text.trim().replace(/```json|```/g, '');\n    const parsed = JSON.parse(text);\n    if (parsed.is_release && parsed.confidence >= 0.6 && parsed.artist && parsed.title) {\n      results.push({\n        json: {\n          artist: parsed.artist,\n          title: parsed.title,\n          release_type: parsed.release_type,\n          source: item.json._channel === 'cloudeluxe' ? 'ru_cloud' : 'us_rap',\n          url: item.json._link || null\n        }\n      });\n    }\n  } catch (e) {\n    // Пропуск в случае ошибки парсинга\n  }\n}\nreturn results;"
+      },
+      "id": "12",
+      "name": "Code (Filter Classified)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [980, 640]
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineAll"
+      },
+      "id": "13",
+      "name": "Merge All Branches (A/B/C)",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [1420, 450]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT artist_name, track_title FROM sent_releases;"
+      },
+      "id": "14",
+      "name": "Postgres (Check Sent Releases)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1640, 450],
+      "credentials": {
+        "postgres": {
+          "id": "postgres_cred",
+          "name": "Postgres local"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $input.all().length }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "15",
+      "name": "IF Has Releases?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1860, 450]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={{ $env.GEMINI_API_KEY }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"contents\": [\n    {\n      \"parts\": [\n        {\n          \"text\": \"Ты собираешь для меня пятничный дайджест новой музыки в Telegram.\\nНа вход дают JSON со списком релизов, у каждого элемента есть:\\nartist, title, release_type, source (taste / ru_cloud / us_rap), url (если есть), match_reason (почему это может понравиться — только для source=taste).\\n\\nПравила:\\n- Раздели вывод на секции по source с понятными заголовками:\\n  \\\"🎧 Новое от твоих артистов\\\", \\\"☁️ RU cloud/андеграунд\\\",\\n  \\\"🇺🇸 US рэп\\\"\\n- В секции \\\"твои артисты\\\" коротко (1 фраза) укажи, почему это может зайти, используя match_reason\\n- Не выдумывай факты, которых нет во входных данных\\n- Формат — Markdown для Telegram (используй *bold*, не используй заголовки H1/H2, не используй лишние эмодзи кроме заголовков секций)\\n- Максимум 15 релизов в сообщении: сначала все из taste, затем ru_cloud и us_rap вперемешку\\n- Если пустая секция — просто её не показывай\\n- Если список релизов вообще пуст — напиши одно короткое дружелюбное предложение в духе \\\"на этой неделе новых релизов не нашлось\\\"\\n\\nДанные:\\n\" + JSON.stringify($input.all().map(i => i.json))\n        }\n      ]\n    }\n  ]\n}",
+        "options": {}
+      },
+      "id": "16",
+      "name": "Gemini Generator (Digest)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2080, 360]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $env.TELEGRAM_CHAT_ID }}",
+        "text": "={{ $json.candidates[0].content.parts[0].text }}",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "17",
+      "name": "Telegram (Send Digest)",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [2300, 360],
+      "credentials": {
+        "telegramApi": {
+          "id": "telegram_bot",
+          "name": "Telegram Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $env.TELEGRAM_CHAT_ID }}",
+        "text": "🎧 *Пятничный дайджест*\n\nНа этой неделе новых интересных релизов не нашлось. Отдыхаем! 😴",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "18",
+      "name": "Telegram (Send Empty Message)",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [2080, 560],
+      "credentials": {
+        "telegramApi": {
+          "id": "telegram_bot",
+          "name": "Telegram Bot"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Пятница 10:00 (Trigger)": {
+      "main": [
+        [
+          {
+            "node": "Spotify Followed Artists",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Spotify Top Artists",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "RSS Read (@cloudeluxe)",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "RSS Read (@USANEWRAP)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Spotify Top Artists": {
+      "main": [
+        [
+          {
+            "node": "Last.fm Similar Artists",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Spotify Followed Artists": {
+      "main": [
+        [
+          {
+            "node": "Code (Merge Artists)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Last.fm Similar Artists": {
+      "main": [
+        [
+          {
+            "node": "Code (Merge Artists)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code (Merge Artists)": {
+      "main": [
+        [
+          {
+            "node": "Spotify Get Artist Albums",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Spotify Get Artist Albums": {
+      "main": [
+        [
+          {
+            "node": "Code (Filter Taste 7 Days)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code (Filter Taste 7 Days)": {
+      "main": [
+        [
+          {
+            "node": "Merge All Branches (A/B/C)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "RSS Read (@cloudeluxe)": {
+      "main": [
+        [
+          {
+            "node": "Postgres (Check Seen Posts)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "RSS Read (@USANEWRAP)": {
+      "main": [
+        [
+          {
+            "node": "Postgres (Check Seen Posts)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Postgres (Check Seen Posts)": {
+      "main": [
+        [
+          {
+            "node": "Gemini Classifier (Post)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini Classifier (Post)": {
+      "main": [
+        [
+          {
+            "node": "Code (Filter Classified)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code (Filter Classified)": {
+      "main": [
+        [
+          {
+            "node": "Merge All Branches (A/B/C)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge All Branches (A/B/C)": {
+      "main": [
+        [
+          {
+            "node": "Postgres (Check Sent Releases)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Postgres (Check Sent Releases)": {
+      "main": [
+        [
+          {
+            "node": "IF Has Releases?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Has Releases?": {
+      "main": [
+        [
+          {
+            "node": "Gemini Generator (Digest)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Telegram (Send Empty Message)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini Generator (Digest)": {
+      "main": [
+        [
+          {
+            "node": "Telegram (Send Digest)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
